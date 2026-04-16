@@ -131,13 +131,22 @@ export async function handleIncomingSMS(fromPhone, body) {
   });
   saveLog(log);
 
-  // Check if seller seems interested (notify you)
-  const interestedKeywords = ["interested", "offer", "how much", "cash", "when", "close", "yes", "sure", "tell me more"];
+  // Check if seller seems interested — notify owner by SMS
+  const interestedKeywords = ["interested", "offer", "how much", "cash", "when", "close", "yes", "sure", "tell me more", "okay", "deal", "accept"];
   if (interestedKeywords.some(w => body.toLowerCase().includes(w))) {
     console.log(`\n🔥 HOT LEAD — ${lead.address} — Seller replied: "${body}"`);
     console.log(`   Your offer: $${lead.analysis?.ourOffer?.toLocaleString()}`);
     console.log(`   Phone: ${fromPhone}`);
-    // TODO: send yourself a notification (email/push)
+    // Alert owner
+    try {
+      await client.messages.create({
+        body: `🔥 HOT LEAD (Houses)\n${lead.address}\nSeller said: "${body}"\nOffer: $${lead.analysis?.ourOffer?.toLocaleString()}\nCall/text them: ${fromPhone}`,
+        from: FROM,
+        to: "+14017716184",
+      });
+    } catch (e) {
+      console.error("Alert failed:", e.message);
+    }
   }
 }
 

@@ -1,16 +1,8 @@
 /**
  * lead_finder.js
- * Finds motivated sellers from multiple sources:
- * 1. Manual CSV import (primary — use PropStream, BatchLeads, or county records)
- * 2. Redfin price-reduced listings via Puppeteer
- * 3. Fallback: Auction.com / HUD homes
- *
- * HOW TO GET LEADS:
- *   - PropStream ($99/mo): propstream.com — best skip-traced lists
- *   - BatchLeads ($49/mo): batchleads.io — good FSBO + absentee owner lists
- *   - FREE: Download county tax delinquent lists from county websites
- *   - FREE: Download from Redfin manually (redfin.com → search → download CSV)
- *   Put any CSV with headers [address, phone, askingPrice] as: leads_import.csv
+ * Finds motivated house sellers from:
+ * 1. Manual CSV import (primary)
+ * 2. Craigslist FSBO listings (sellers post their phone in the listing)
  */
 
 import puppeteer from "puppeteer-extra";
@@ -19,28 +11,28 @@ import * as cheerio from "cheerio";
 import axios from "axios";
 import fs from "fs";
 import dotenv from "dotenv";
+import { skipTraceLeads } from "./skip_tracer.js";
 dotenv.config();
 
 puppeteer.use(StealthPlugin());
 
-// City → Redfin filter URL
+// Craigslist cities to search (real estate by owner)
 const CITIES = [
-  // These are known-working Redfin city IDs verified from the site
-  { name: "Memphis, TN",      url: "https://www.redfin.com/city/24536/TN/Memphis" },
-  { name: "Cleveland, OH",    url: "https://www.redfin.com/city/17233/OH/Cleveland" },
-  { name: "Detroit, MI",      url: "https://www.redfin.com/city/18770/MI/Detroit" },
-  { name: "Indianapolis, IN", url: "https://www.redfin.com/city/20980/IN/Indianapolis" },
-  { name: "Birmingham, AL",   url: "https://www.redfin.com/city/15534/AL/Birmingham" },
-  { name: "Kansas City, MO",  url: "https://www.redfin.com/city/22034/MO/Kansas-City" },
-  { name: "St. Louis, MO",    url: "https://www.redfin.com/city/27716/MO/Saint-Louis" },
-  { name: "Jacksonville, FL", url: "https://www.redfin.com/city/21476/FL/Jacksonville" },
-  { name: "Columbus, OH",     url: "https://www.redfin.com/city/17318/OH/Columbus" },
-  { name: "Oklahoma City, OK",url: "https://www.redfin.com/city/25963/OK/Oklahoma-City" },
-  { name: "Atlanta, GA",      url: "https://www.redfin.com/city/29166/GA/Atlanta" },
-  { name: "Houston, TX",      url: "https://www.redfin.com/city/17426/TX/Houston" },
-  { name: "Dallas, TX",       url: "https://www.redfin.com/city/17842/TX/Dallas" },
-  { name: "Phoenix, AZ",      url: "https://www.redfin.com/city/26711/AZ/Phoenix" },
-  { name: "Orlando, FL",      url: "https://www.redfin.com/city/26040/FL/Orlando" },
+  { name: "Memphis, TN",       cl: "memphis" },
+  { name: "Cleveland, OH",     cl: "cleveland" },
+  { name: "Detroit, MI",       cl: "detroit" },
+  { name: "Indianapolis, IN",  cl: "indianapolis" },
+  { name: "Jacksonville, FL",  cl: "jacksonville" },
+  { name: "Columbus, OH",      cl: "columbus" },
+  { name: "Atlanta, GA",       cl: "atlanta" },
+  { name: "Houston, TX",       cl: "houston" },
+  { name: "Dallas, TX",        cl: "dallas" },
+  { name: "Phoenix, AZ",       cl: "phoenix" },
+  { name: "Orlando, FL",       cl: "orlando" },
+  { name: "Kansas City, MO",   cl: "kansascity" },
+  { name: "St. Louis, MO",     cl: "stlouis" },
+  { name: "Tampa, FL",         cl: "tampa" },
+  { name: "Charlotte, NC",     cl: "charlotte" },
 ];
 
 // ── CSV Import (primary lead source) ─────────────────────────────────────────
@@ -67,7 +59,7 @@ export function loadManualLeads(maxLeads = 50) {
     if (address) {
       leads.push({
         source: "csv_import",
-        city: city || address.split(",").slice(-2, -1)[0]?.trim() || "",
+        city,
         address,
         askingPrice: price,
         phone: phone.replace(/[^0-9]/g, "") || null,
@@ -93,84 +85,116 @@ function parseCSVLine(line) {
   return fields;
 }
 
-// ── Redfin scraper via Puppeteer ─────────────────────────────────────────────
-export async function findRedfinLeads(cityObj, maxLeads = 15) {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-  });
+// ── Extract phone number from text ────────────────────────────────────────────
+function extractPhone(text) {
+  const matches = text.match(/(\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4})/g);
+  if (!matches) return null;
+  // Filter out zip codes and short numbers
+  for (const m of matches) {
+    const digits = m.replace(/\D/g, "");
+    if (digits.length === 10 && !digits.startsWith("000")) return digits;
+    if (digits.length === 11 && digits.startsWith("1")) return digits.slice(1);
+  }
+  return null;
+}
 
+// ── Craigslist FSBO scraper ───────────────────────────────────────────────────
+export async function findCraigslistLeads(cityObj, maxLeads = 10) {
   const leads = [];
 
   try {
-    const page = await browser.newPage();
-    await page.setUserAgent(
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    );
-    await page.setViewport({ width: 1280, height: 800 });
+    // Search Craigslist real estate by owner, price reduced / motivated keywords
+    const searchUrl = `https://${cityObj.cl}.craigslist.org/search/rea?srchType=T&max_price=350000&query=for+sale+by+owner&sort=priceasc`;
 
-    const filterUrl = `${cityObj.url}/filter/min-price=50k,max-price=350k,sort=price-reduced-desc,property-type=house`;
-    console.log(`  🔍 Scraping Redfin: ${cityObj.name}`);
+    console.log(`  🔍 Craigslist FSBO: ${cityObj.name}`);
 
-    await page.goto(filterUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await new Promise(r => setTimeout(r, 5000));
-
-    const html = await page.content();
-    const $ = cheerio.load(html);
-
-    // Extract from schema.org JSON-LD (most reliable)
-    $("script[type='application/ld+json']").each((_, el) => {
-      try {
-        const data = JSON.parse($(el).html());
-        const items = Array.isArray(data) ? data : [data];
-        items.forEach(item => {
-          if (item["@type"] === "Product" || (item.name && item.url && item.url.includes("/home/"))) {
-            const price = item.offers?.price || item.price || 0;
-            const address = item.name || "";
-            if (address && parseInt(price) > 0 && !leads.some(l => l.address === address)) {
-              leads.push({
-                source: "redfin",
-                city: cityObj.name,
-                address,
-                askingPrice: parseInt(price) || 0,
-                url: item.url || null,
-                phone: null,
-                email: null,
-                scrapedAt: new Date().toISOString(),
-              });
-            }
-          }
-        });
-      } catch { /* skip */ }
+    const res = await axios.get(searchUrl, {
+      timeout: 15000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
     });
 
-    // Fallback: extract from address elements
-    if (leads.length === 0) {
-      $("[class*=address], [class*=Address]").each((_, el) => {
-        const text = $(el).text().trim();
-        if (text.match(/^\d+\s+\w+/)) {
-          const priceEl = $(el).closest("[class*=HomeCard]").find("[class*=price]").text();
-          const price = parseInt(priceEl.replace(/[^0-9]/g, "")) || 0;
-          if (!leads.some(l => l.address === text)) {
-            leads.push({
-              source: "redfin",
-              city: cityObj.name,
-              address: text,
-              askingPrice: price,
-              url: null,
-              phone: null,
-              email: null,
-              scrapedAt: new Date().toISOString(),
-            });
-          }
+    const $ = cheerio.load(res.data);
+    const listings = [];
+
+    // Extract listing URLs
+    $("li.cl-search-result, .result-row, li[class*=result]").each((_, el) => {
+      const link = $(el).find("a[href*='/rea/'], a[href*='/reo/'], a.posting-title").attr("href");
+      const title = $(el).find(".posting-title, a.posting-title, .result-title").text().trim();
+      const priceText = $(el).find(".priceinfo, .result-price").text().trim();
+      const price = parseInt(priceText.replace(/[^0-9]/g, "")) || 0;
+
+      if (link && title) {
+        const fullUrl = link.startsWith("http") ? link : `https://${cityObj.cl}.craigslist.org${link}`;
+        listings.push({ url: fullUrl, title, price });
+      }
+    });
+
+    // Also try newer Craigslist markup
+    if (listings.length === 0) {
+      $("a.posting-title, .cl-app-anchor").each((_, el) => {
+        const link = $(el).attr("href");
+        const title = $(el).text().trim();
+        if (link && link.includes("/rea/") && title) {
+          const fullUrl = link.startsWith("http") ? link : `https://${cityObj.cl}.craigslist.org${link}`;
+          listings.push({ url: fullUrl, title, price: 0 });
         }
       });
     }
 
+    console.log(`    Found ${listings.length} listings, extracting contact info...`);
+
+    // Visit each listing to extract phone number
+    for (const listing of listings.slice(0, maxLeads * 2)) {
+      if (leads.length >= maxLeads) break;
+
+      try {
+        const detailRes = await axios.get(listing.url, {
+          timeout: 10000,
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+          },
+        });
+
+        const $d = cheerio.load(detailRes.data);
+        const bodyText = $d("#postingbody, .posting-body, body").text();
+        const phone = extractPhone(bodyText);
+
+        // Extract price if not found
+        let price = listing.price;
+        if (!price) {
+          const priceMatch = $d(".price, [class*=price]").first().text();
+          price = parseInt(priceMatch.replace(/[^0-9]/g, "")) || 0;
+        }
+
+        // Extract address if available
+        const mapAddress = $d(".mapaddress, [class*=mapaddress]").text().trim();
+        const address = mapAddress || listing.title;
+
+        if (phone) {
+          leads.push({
+            source: "craigslist",
+            city: cityObj.name,
+            address,
+            askingPrice: price,
+            phone,
+            url: listing.url,
+            email: null,
+            scrapedAt: new Date().toISOString(),
+          });
+          console.log(`    ✓ Found: ${address} | $${price.toLocaleString()} | ${phone}`);
+        }
+
+        await new Promise(r => setTimeout(r, 800));
+
+      } catch { /* skip this listing */ }
+    }
+
   } catch (err) {
-    console.log(`    ⚠️  Redfin ${cityObj.name}: ${err.message.slice(0, 80)}`);
-  } finally {
-    await browser.close();
+    console.log(`    ⚠️  Craigslist ${cityObj.name}: ${err.message.slice(0, 80)}`);
   }
 
   return leads.slice(0, maxLeads);
@@ -178,8 +202,6 @@ export async function findRedfinLeads(cityObj, maxLeads = 15) {
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 export async function findLeads(maxTotal = 20) {
-  const allLeads = [];
-
   // 1. Check for manual CSV import first
   const manualLeads = loadManualLeads(maxTotal);
   if (manualLeads.length > 0) {
@@ -187,30 +209,34 @@ export async function findLeads(maxTotal = 20) {
     return manualLeads.slice(0, maxTotal);
   }
 
-  // 2. Scrape Redfin across 2-3 random cities
+  // 2. Scrape Craigslist FSBO across random cities
   const shuffled = [...CITIES].sort(() => Math.random() - 0.5);
-  const citiesToTry = shuffled.slice(0, 3);
-  console.log(`\n🏠 Finding motivated seller leads...`);
+  const citiesToTry = shuffled.slice(0, 4);
+
+  console.log(`\n🏠 Finding motivated seller leads on Craigslist...`);
   console.log(`   Searching: ${citiesToTry.map(c => c.name).join(", ")}`);
+
+  const allLeads = [];
 
   for (const city of citiesToTry) {
     if (allLeads.length >= maxTotal) break;
     const perCity = Math.ceil((maxTotal - allLeads.length) / citiesToTry.length);
-    const leads = await findRedfinLeads(city, perCity);
+    const leads = await findCraigslistLeads(city, perCity);
     allLeads.push(...leads);
-    console.log(`  Found ${leads.length} leads in ${city.name} (total: ${allLeads.length})`);
+    console.log(`  Found ${leads.length} leads with phones in ${city.name} (total: ${allLeads.length})`);
     await new Promise(r => setTimeout(r, 2000));
   }
 
-  if (allLeads.length === 0) {
+  // 3. Skip trace any leads missing phone numbers
+  const leadsWithPhones = await skipTraceLeads(allLeads);
+
+  if (leadsWithPhones.length === 0) {
     console.log(`
-  ⚠️  No leads scraped. To import leads manually:
-     1. Go to redfin.com → search your city → download CSV
-     2. OR use PropStream/BatchLeads for motivated seller lists
-     3. Save the file as: leads_import.csv
-     4. Required columns: address, phone (optional: price, email)
+  ⚠️  No leads with phone numbers found.
+     Add BATCH_SKIP_TRACING_API_KEY to your .env file to enable automatic phone lookup.
+     Sign up at batchskiptracing.com (~$0.18/record)
 `);
   }
 
-  return allLeads.slice(0, maxTotal);
+  return leadsWithPhones.slice(0, maxTotal);
 }

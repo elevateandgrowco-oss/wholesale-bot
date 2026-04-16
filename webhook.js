@@ -14,6 +14,7 @@
 
 import express from "express";
 import { handleIncomingSMS } from "./sms_bot.js";
+import { loadLog } from "./leads_log.js";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -40,6 +41,16 @@ app.post("/sms", async (req, res) => {
   } catch (err) {
     console.error("❌ Error handling SMS:", err.message);
   }
+});
+
+// ── Phone lookup — used by SMS router to find which bot owns a number ────────
+app.post("/lookup", (req, res) => {
+  const log = loadLog();
+  const digits = (req.body.phone || "").replace(/[^0-9]/g, "").slice(-10);
+  const found = log.leads.some(l =>
+    l.phone && l.phone.replace(/[^0-9]/g, "").slice(-10) === digits && l.smsSent
+  );
+  res.json({ found });
 });
 
 // ── Health check ──────────────────────────────────────────────────────────────

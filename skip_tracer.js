@@ -1,9 +1,9 @@
 /**
  * skip_tracer.js
- * BatchSkipTracing.com API integration.
+ * BatchData API integration (formerly BatchSkipTracing).
  * Takes property addresses, returns owner phone numbers.
  * Cost: ~$0.18/record
- * Sign up: batchskiptracing.com
+ * Sign up: batchdata.com
  */
 
 import axios from "axios";
@@ -11,7 +11,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const API_KEY = process.env.BATCH_SKIP_TRACING_API_KEY;
-const API_URL = "https://api.batchskiptracing.com/api/SkipTrace";
+const API_URL = "https://api.batchdata.com/api/v1/property/skip-trace";
 
 /**
  * Skip trace a batch of leads to get owner phone numbers.
@@ -32,9 +32,8 @@ export async function skipTraceLeads(leads) {
 
   console.log(`\n📞 Skip tracing ${leadsNeedingPhones.length} leads for phone numbers...`);
 
-  // Build input array for BatchSkipTracing
-  const input = leadsNeedingPhones.map((lead, i) => {
-    // Parse address into components
+  // Build request for BatchData
+  const requests = leadsNeedingPhones.map((lead, i) => {
     const parts = lead.address.split(",").map(p => p.trim());
     const streetAddress = parts[0] || "";
     const cityState = parts[1] || lead.city || "";
@@ -54,49 +53,62 @@ export async function skipTraceLeads(leads) {
   try {
     const response = await axios.post(
       API_URL,
-      { input },
+      { requests },
       {
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": API_KEY,
+          "Authorization": `Bearer ${API_KEY}`,
         },
         timeout: 60000,
       }
     );
 
-    const results = response.data?.output || response.data?.results || [];
+    // BatchData v1 response format
+    const results = response.data?.results
+      || response.data?.output
+      || response.data?.data
+      || [];
+
     console.log(`  📞 Got results for ${results.length} addresses`);
 
-    // Map results back to leads
     let phonesFound = 0;
     for (const result of results) {
       const idx = parseInt(result.id || "0");
       const lead = leadsNeedingPhones[idx];
       if (!lead) continue;
 
-      // BatchSkipTracing returns multiple phone numbers — grab best one
-      const phones = [
+      // Extract phones — BatchData returns nested person/phones arrays
+      const personData = result.person || result;
+      const phoneList = personData.phones || personData.phoneNumbers || [];
+
+      // Also check flat fields
+      const flatPhones = [
+        result.mobilePhone,
         result.phone1,
         result.phone2,
-        result.phone3,
-        result.mobilePhone,
-        result.landlinePhone,
+        personData.mobilePhone,
+        personData.phone1,
       ].filter(Boolean);
 
-      // Prefer mobile phones
-      const mobilePhone = result.mobilePhone || phones[0];
+      // Prefer mobile from list
+      let bestPhone = null;
+      if (phoneList.length > 0) {
+        const mobile = phoneList.find(p => p.type === "mobile" || p.phoneType === "mobile");
+        bestPhone = mobile?.number || mobile?.phone || phoneList[0]?.number || phoneList[0]?.phone;
+      }
+      bestPhone = bestPhone || flatPhones[0];
 
-      if (mobilePhone) {
-        const digits = mobilePhone.replace(/[^0-9]/g, "");
+      if (bestPhone) {
+        const digits = String(bestPhone).replace(/[^0-9]/g, "");
         lead.phone = digits.length === 11 && digits.startsWith("1")
           ? digits.slice(1)
           : digits;
 
-        // Also grab owner name and email if available
-        if (result.firstName || result.lastName) {
-          lead.ownerName = `${result.firstName || ""} ${result.lastName || ""}`.trim();
+        if (result.firstName || result.lastName || personData.firstName) {
+          lead.ownerName = `${result.firstName || personData.firstName || ""} ${result.lastName || personData.lastName || ""}`.trim();
         }
-        if (result.email1) lead.email = result.email1;
+        const email = result.email1 || personData.email1 || (personData.emails || [])[0]?.email;
+        if (email) lead.email = email;
 
         phonesFound++;
         console.log(`  ✓ ${lead.address} → ${lead.phone}${lead.ownerName ? ` (${lead.ownerName})` : ""}`);
@@ -109,14 +121,14 @@ export async function skipTraceLeads(leads) {
 
   } catch (err) {
     if (err.response?.status === 401) {
-      console.error("  ❌ Invalid BatchSkipTracing API key — check BATCH_SKIP_TRACING_API_KEY");
+      console.error("  ❌ Invalid BatchData API token — check BATCH_SKIP_TRACING_API_KEY");
     } else if (err.response?.status === 402) {
-      console.error("  ❌ Insufficient BatchSkipTracing credits — add funds at batchskiptracing.com");
+      console.error("  ❌ Insufficient BatchData credits — add funds at batchdata.com");
     } else {
       console.error(`  ❌ Skip trace error: ${err.message}`);
+      if (err.response?.data) console.error("  Response:", JSON.stringify(err.response.data).slice(0, 200));
     }
   }
 
-  // Return all leads (with phones filled in where found), filter out ones still missing phones
   return leads.filter(l => l.phone);
 }

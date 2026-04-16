@@ -1,0 +1,26 @@
+{
+  "name": "wholesale-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dry-run": "node index.js --dry-run",
+    "webhook": "node webhook.js",
+    "test": "node index.js --dry-run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.0.0",
+    "express": "^5.2.1",
+    "nodemailer": "^6.9.0",
+    "pdf-lib": "^1.17.1",
+    "puppeteer": "^24.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "resend": "^3.0.0",
+    "twilio": "^5.0.0"
+  }
+}

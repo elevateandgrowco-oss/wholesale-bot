@@ -48,4 +48,4 @@ COPY . .
 
 # Default: run the webhook server (always-on service)
 # Override with CMD ["node", "index.js"] for cron service
-CMD ["node", "webhook.js"]
+CMD ["node", "server.js"]

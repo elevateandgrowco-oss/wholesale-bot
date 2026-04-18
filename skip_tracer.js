@@ -24,10 +24,20 @@ export async function skipTraceLeads(leads) {
     return leads;
   }
 
-  const leadsNeedingPhones = leads.filter(l => !l.phone);
+  // Only skip trace leads that have a real street address (not just "City, ST")
+  const leadsNeedingPhones = leads.filter(l => {
+    if (l.phone) return false;
+    const addr = l.address || "";
+    // Must have a number in the address (real street address, not just "Columbus, OH")
+    return /\d/.test(addr.split(",")[0]);
+  });
+
+  // Return leads that already have phones
+  const leadsWithPhones = leads.filter(l => l.phone);
+
   if (leadsNeedingPhones.length === 0) {
     console.log("  ✓ All leads already have phone numbers");
-    return leads;
+    return leadsWithPhones;
   }
 
   console.log(`\n📞 Skip tracing ${leadsNeedingPhones.length} leads for phone numbers...`);
@@ -40,13 +50,16 @@ export async function skipTraceLeads(leads) {
     const cityParts = cityState.trim().split(" ");
     const state = cityParts[cityParts.length - 1] || "";
     const city = cityParts.slice(0, -1).join(" ") || cityState;
+    const zip = (parts[2] || "").replace(/[^0-9]/g, "").slice(0, 5);
 
     return {
       id: String(i),
-      propertyAddress: streetAddress,
-      propertyCity: city,
-      propertyState: state,
-      propertyZip: parts[2] || "",
+      propertyAddress: {
+        street: streetAddress,
+        city,
+        state,
+        zip,
+      },
     };
   });
 
@@ -63,57 +76,48 @@ export async function skipTraceLeads(leads) {
       }
     );
 
-    // BatchData v1 response format
-    const results = response.data?.results
-      || response.data?.output
-      || response.data?.data
-      || [];
+    // BatchData response format: { results: { persons: [...] } }
+    const raw = response.data;
+    const persons = raw?.results?.persons || [];
 
-    console.log(`  📞 Got results for ${results.length} addresses`);
+    console.log(`  📞 Got results for ${persons.length} addresses`);
 
     let phonesFound = 0;
-    for (const result of results) {
-      const idx = parseInt(result.id || "0");
+    for (const person of persons) {
+      const idx = parseInt(person?.request?.id ?? person?.meta?.id ?? "0");
       const lead = leadsNeedingPhones[idx];
       if (!lead) continue;
 
-      // Extract phones — BatchData returns nested person/phones arrays
-      const personData = result.person || result;
-      const phoneList = personData.phones || personData.phoneNumbers || [];
+      // Phone numbers: person.phoneNumbers array [{number, type, ...}]
+      const phoneList = person.phoneNumbers || person.phones || [];
+      const flatPhones = [person.phone1, person.phone2, person.mobilePhone].filter(Boolean);
 
-      // Also check flat fields
-      const flatPhones = [
-        result.mobilePhone,
-        result.phone1,
-        result.phone2,
-        personData.mobilePhone,
-        personData.phone1,
-      ].filter(Boolean);
-
-      // Prefer mobile from list
       let bestPhone = null;
       if (phoneList.length > 0) {
-        const mobile = phoneList.find(p => p.type === "mobile" || p.phoneType === "mobile");
-        bestPhone = mobile?.number || mobile?.phone || phoneList[0]?.number || phoneList[0]?.phone;
+        const mobile = phoneList.find(p => (p.type || p.phoneType || "").toLowerCase().includes("mobile"));
+        const anyPhone = phoneList[0];
+        bestPhone = mobile?.number || mobile?.phone || anyPhone?.number || anyPhone?.phone;
       }
       bestPhone = bestPhone || flatPhones[0];
 
       if (bestPhone) {
         const digits = String(bestPhone).replace(/[^0-9]/g, "");
-        lead.phone = digits.length === 11 && digits.startsWith("1")
-          ? digits.slice(1)
-          : digits;
+        lead.phone = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
 
-        if (result.firstName || result.lastName || personData.firstName) {
-          lead.ownerName = `${result.firstName || personData.firstName || ""} ${result.lastName || personData.lastName || ""}`.trim();
+        // Name from person.name object
+        const name = person.name || {};
+        if (name.first || name.last) {
+          lead.ownerName = `${name.first || ""} ${name.last || ""}`.trim();
         }
-        const email = result.email1 || personData.email1 || (personData.emails || [])[0]?.email;
-        if (email) lead.email = email;
+
+        // Email from person.emails array
+        const emails = person.emails || [];
+        if (emails.length > 0) lead.email = emails[0].email || emails[0];
 
         phonesFound++;
         console.log(`  ✓ ${lead.address} → ${lead.phone}${lead.ownerName ? ` (${lead.ownerName})` : ""}`);
       } else {
-        console.log(`  ✗ ${lead.address} → no phone found`);
+        if (person.meta?.matched) console.log(`  ✗ ${lead.address} → matched but no phone`);
       }
     }
 

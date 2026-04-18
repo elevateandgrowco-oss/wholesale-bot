@@ -6,11 +6,19 @@
  * 3. Maintains a growing investor database
  */
 
-import puppeteer from "puppeteer";
 import * as cheerio from "cheerio";
 import fs from "fs";
 import dotenv from "dotenv";
 dotenv.config();
+
+let puppeteerReady = false;
+let puppeteer;
+async function initPuppeteer() {
+  if (puppeteerReady) return;
+  const { default: p } = await import("puppeteer");
+  puppeteer = p;
+  puppeteerReady = true;
+}
 
 const INVESTOR_DB = "investors.json";
 
@@ -26,6 +34,7 @@ function saveInvestors(db) {
 
 // ── Find investors from Craigslist "we buy houses" ───────────────────────────
 export async function findCraigslistInvestors(city) {
+  await initPuppeteer();
   const browser = await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],

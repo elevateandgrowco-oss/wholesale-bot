@@ -10,8 +10,6 @@
  * 7. Manual CSV import         — your own list (always included)
  */
 
-import puppeteer from "puppeteer-extra";
-import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import * as cheerio from "cheerio";
 import axios from "axios";
 import fs from "fs";
@@ -19,7 +17,17 @@ import dotenv from "dotenv";
 import { skipTraceLeads } from "./skip_tracer.js";
 dotenv.config();
 
-puppeteer.use(StealthPlugin());
+// Lazy-load puppeteer so the HTTP server starts without heavy module init
+let puppeteerReady = false;
+let puppeteer;
+async function initPuppeteer() {
+  if (puppeteerReady) return;
+  const { default: pExtra } = await import("puppeteer-extra");
+  const { default: StealthPlugin } = await import("puppeteer-extra-plugin-stealth");
+  pExtra.use(StealthPlugin());
+  puppeteer = pExtra;
+  puppeteerReady = true;
+}
 
 const BATCH_API_KEY = process.env.BATCH_SKIP_TRACING_API_KEY;
 
@@ -191,6 +199,7 @@ async function findBatchDataLeads(market, filterType, maxLeads = 25) {
 
 // ── 3. Craigslist FSBO (Puppeteer — JS rendering required) ───────────────────
 export async function findCraigslistLeads(market, maxLeads = 10) {
+  await initPuppeteer();
   const leads = [];
   let browser;
   try {
@@ -250,6 +259,7 @@ export async function findCraigslistLeads(market, maxLeads = 10) {
 
 // ── 4. Zillow FSBO + Price Reduced ───────────────────────────────────────────
 async function findZillowLeads(market, maxLeads = 15) {
+  await initPuppeteer();
   const leads = [];
   let browser;
   try {
@@ -322,6 +332,7 @@ async function findZillowLeads(market, maxLeads = 15) {
 // ── 5. Redfin Price-Reduced Listings ─────────────────────────────────────────
 // Sellers who already dropped their price = highly motivated
 async function findRedfinLeads(market, maxLeads = 15) {
+  await initPuppeteer();
   const leads = [];
   let browser;
   try {
@@ -540,6 +551,7 @@ async function findTaxDelinquentLeads(market, maxLeads = 20) {
 
 // ── 7. Facebook Marketplace FSBO ─────────────────────────────────────────────
 async function findFacebookLeads(market, maxLeads = 10) {
+  await initPuppeteer();
   const leads = [];
   let browser;
   try {

@@ -1,6 +1,5 @@
 FROM node:20-slim
 
-# Install Chromium for Puppeteer scraping
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-liberation \
@@ -40,12 +39,8 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
-
 COPY package*.json ./
 RUN npm ci --omit=dev
-
 COPY . .
 
-# Default: run the webhook server (always-on service)
-# Override with CMD ["node", "index.js"] for cron service
 CMD ["node", "server.js"]

@@ -50,6 +50,13 @@ app.post("/sms", async (req, res) => {
   }
 });
 
+// ── Manual trigger — for testing ─────────────────────────────────────────────
+app.post("/run", async (req, res) => {
+  if (!modReady) return res.json({ status: "error", message: "modules not ready" });
+  res.json({ status: "ok", message: "run started" });
+  runOutreach().catch(err => console.error("Manual run error:", err.message));
+});
+
 // ── Phone lookup — used by sms-router ────────────────────────────────────────
 app.post("/lookup", (req, res) => {
   if (!modReady) return res.json({ found: false });

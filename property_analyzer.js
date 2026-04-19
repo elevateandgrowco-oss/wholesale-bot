@@ -103,16 +103,29 @@ export async function analyzeProperty(lead) {
 
 // ── Generate AI offer message for seller ─────────────────────────────────────
 export async function generateOfferMessage(lead, analysis) {
+  const firstName = lead.ownerName ? lead.ownerName.split(" ")[0] : null;
+  const greeting = firstName ? `Hey ${firstName}` : "Hey";
+  const shortAddr = lead.address.split(",")[0];
+
   const msg = await claude.messages.create({
     model: "claude-haiku-4-5-20251001",
     max_tokens: 120,
-    system: "You are a real estate wholesaler. Output ONLY the SMS text — no formatting, no explanation, no headers, no markdown.",
+    system: "You write text messages that sound exactly like a real person texting. No sales language. No buzzwords. Output ONLY the message text — nothing else.",
     messages: [{
       role: "user",
-      content: `Write a single casual SMS text message to a motivated seller.
-Property: ${lead.address}
-Our cash offer: $${analysis.ourOffer?.toLocaleString()}
-Rules: 1-2 sentences max. Mention cash, fast close, as-is. Friendly. End with "- Jon". ONLY output the message text.`,
+      content: `Write a first text to someone who owns a house you want to buy.
+
+Start with: "${greeting}"
+Address: ${shortAddr}
+${lead.source?.includes("distressed") || lead.motivation ? `Situation: ${lead.motivation || "may need to sell"}` : ""}
+
+Rules:
+- Sound like a real person, not an investor or wholesaler
+- 1-2 sentences MAX
+- Do NOT say: "cash offer", "fast close", "as-is", "motivated seller", "I'm a buyer", "no obligation"
+- Just ask if they'd be open to selling or entertaining an offer — casual and direct
+- End with "- Jon"
+- Output the message only`,
     }],
   });
   // Strip any markdown or headers that leaked through
@@ -141,9 +154,11 @@ Their asking price: $${lead.askingPrice?.toLocaleString()}
 Our offer: $${analysis.ourOffer?.toLocaleString()}
 Our max we can go: $${analysis.mao?.toLocaleString()}
 
-Keep responses SHORT (1-3 sentences max). Conversational SMS tone.
-Goal: get them to accept our offer or get on a call.
-If they seem interested, ask for a quick call to "go over the details."
+Keep replies SHORT — 1-2 sentences, casual texting tone. Sound like a real person, not an investor.
+Never use: "cash offer", "fast close", "as-is", "no obligation", "I'm a buyer" — just talk normally.
+Goal: keep the conversation going and move toward agreeing on a number.
+If they give a price, work toward middle ground naturally.
+If they want to move forward, ask for their email to send paperwork.
 Sign as "- Jon"`,
     messages,
   });

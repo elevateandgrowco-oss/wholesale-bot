@@ -4,9 +4,15 @@
  */
 
 import fs from "fs";
+import path from "path";
 import crypto from "crypto";
 
-const LOG_FILE = "leads.json";
+const DATA_DIR = process.env.DATA_DIR || ".";
+const LOG_FILE = path.join(DATA_DIR, "leads.json");
+
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
 
 export function loadLog() {
   if (!fs.existsSync(LOG_FILE)) return { leads: [], stats: { totalLeads: 0, smsSent: 0, replied: 0, underContract: 0, closed: 0 } };

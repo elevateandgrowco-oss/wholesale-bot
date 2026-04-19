@@ -18,6 +18,7 @@ dotenv.config();
 import { findLeads } from "./lead_finder.js";
 import { analyzeProperty, generateOfferMessage } from "./property_analyzer.js";
 import { sendOfferSMS, runFollowUps } from "./sms_bot.js";
+import { sendOutreachEmail } from "./email_outreach.js";
 import { updateInvestorDatabase, getInvestorCount } from "./investor_finder.js";
 import { loadLog, saveLog, hasBeenContacted, addLead, updateLead, printSummary } from "./leads_log.js";
 
@@ -91,8 +92,20 @@ async function processLead(lead, log) {
     } catch (err) {
       console.error(`   ❌ SMS failed: ${err.message}`);
     }
+
+    // Also email if skip trace found one
+    if (lead.email) {
+      try {
+        await sendOutreachEmail(lead, analysis);
+        console.log(`   📧 Email sent to ${lead.email}`);
+        updateLead(log, loggedLead.id, { emailSent: true });
+        saveLog(log);
+      } catch (err) {
+        console.error(`   ❌ Email failed: ${err.message}`);
+      }
+    }
   } else {
-    console.log(`   [DRY RUN] Would text ${lead.phone}`);
+    console.log(`   [DRY RUN] Would text ${lead.phone}${lead.email ? ` + email ${lead.email}` : ""}`);
   }
 
   await sleep(2000);

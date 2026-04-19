@@ -88,21 +88,30 @@ export async function skipTraceLeads(leads) {
       const lead = leadsNeedingPhones[idx];
       if (!lead) continue;
 
-      // Phone numbers: person.phoneNumbers array [{number, type, ...}]
+      // Collect ALL phone numbers (mobile first, then others)
       const phoneList = person.phoneNumbers || person.phones || [];
       const flatPhones = [person.phone1, person.phone2, person.mobilePhone].filter(Boolean);
-
-      let bestPhone = null;
+      const allPhoneNumbers = [];
       if (phoneList.length > 0) {
-        const mobile = phoneList.find(p => (p.type || p.phoneType || "").toLowerCase().includes("mobile"));
-        const anyPhone = phoneList[0];
-        bestPhone = mobile?.number || mobile?.phone || anyPhone?.number || anyPhone?.phone;
+        const mobiles = phoneList.filter(p => (p.type || p.phoneType || "").toLowerCase().includes("mobile"));
+        const others = phoneList.filter(p => !(p.type || p.phoneType || "").toLowerCase().includes("mobile"));
+        for (const p of [...mobiles, ...others]) {
+          const num = p.number || p.phone;
+          if (num) allPhoneNumbers.push(String(num).replace(/[^0-9]/g, ""));
+        }
       }
-      bestPhone = bestPhone || flatPhones[0];
+      for (const p of flatPhones) {
+        const digits = String(p).replace(/[^0-9]/g, "");
+        if (digits && !allPhoneNumbers.includes(digits)) allPhoneNumbers.push(digits);
+      }
 
-      if (bestPhone) {
-        const digits = String(bestPhone).replace(/[^0-9]/g, "");
-        lead.phone = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+      const cleanedPhones = allPhoneNumbers
+        .map(d => d.length === 11 && d.startsWith("1") ? d.slice(1) : d)
+        .filter(d => d.length === 10);
+
+      if (cleanedPhones.length > 0) {
+        lead.phone = cleanedPhones[0];
+        lead.allPhones = cleanedPhones;
 
         // Name from person.name object
         const name = person.name || {};
@@ -115,7 +124,7 @@ export async function skipTraceLeads(leads) {
         if (emails.length > 0) lead.email = emails[0].email || emails[0];
 
         phonesFound++;
-        console.log(`  ✓ ${lead.address} → ${lead.phone}${lead.ownerName ? ` (${lead.ownerName})` : ""}`);
+        console.log(`  ✓ ${lead.address} → ${cleanedPhones.length} phone(s)${lead.ownerName ? ` (${lead.ownerName})` : ""}`);
       } else {
         if (person.meta?.matched) console.log(`  ✗ ${lead.address} → matched but no phone`);
       }

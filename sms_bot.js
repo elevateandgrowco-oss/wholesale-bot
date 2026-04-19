@@ -166,9 +166,14 @@ export async function runFollowUps(dryRun = false) {
     const daysSinceSent = (now - sentAt) / DAY;
     const hasReplied = lead.conversation?.some(m => m.role === "user");
 
+    const firstName = lead.ownerName ? lead.ownerName.split(" ")[0] : null;
+    const hey = firstName ? `Hey ${firstName}` : "Hey";
+    const shortAddr = lead.address.split(",")[0];
+    const offer = lead.analysis?.ourOffer ? `$${lead.analysis.ourOffer.toLocaleString()}` : "something fair";
+
     // Follow-up 1: Day 3
     if (!lead.followUp1SentAt && daysSinceSent >= 3 && !hasReplied) {
-      const msg = `Hey, just following up on ${lead.address}. Still interested in a cash offer? No obligation — just takes 2 min. - Jon`;
+      const msg = `${hey}, did my text come through about ${shortAddr}? - Jon`;
       if (!dryRun) {
         await sendFollowUpSMS(lead.phone, msg, lead.id, 1);
       } else {
@@ -178,7 +183,7 @@ export async function runFollowUps(dryRun = false) {
 
     // Follow-up 2: Day 7
     if (!lead.followUp2SentAt && daysSinceSent >= 7 && !hasReplied) {
-      const msg = `Last follow up on ${lead.address} — if timing isn't right, no worries. We buy regularly in this area. Reach out anytime. - Jon`;
+      const msg = `${hey}, still interested in ${shortAddr} if you'd consider ${offer}. No rush either way — Jon`;
       if (!dryRun) {
         await sendFollowUpSMS(lead.phone, msg, lead.id, 2);
       } else {

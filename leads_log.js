@@ -25,7 +25,7 @@ export function saveLog(log) {
 }
 
 export function hasBeenContacted(log, address) {
-  return log.leads.some(l => l.address === address && l.smsSent);
+  return log.leads.some(l => l.address === address && (l.smsSent || l.voicemailSent));
 }
 
 export function addLead(log, leadData) {

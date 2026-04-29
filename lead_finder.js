@@ -280,9 +280,9 @@ export async function findCraigslistLeads(market, maxLeads = 10) {
         const phone = extractPhone(bodyText);
         const price = parseInt($d(".price, [class*=price]").first().text().replace(/[^0-9]/g, "")) || 0;
         const address = $d(".mapaddress, [class*=mapaddress]").text().trim() || $d("h1, .postingtitletext").text().trim();
-        if (phone && address) {
-          leads.push({ source: "craigslist", city: market.name, address, askingPrice: price, phone, motivation: "fsbo", scrapedAt: new Date().toISOString() });
-          console.log(`    ✓ ${address.slice(0, 40)} | ${phone}`);
+        if (address) {
+          leads.push({ source: "craigslist", city: market.name, address, askingPrice: price, phone: phone || null, motivation: "fsbo", scrapedAt: new Date().toISOString() });
+          console.log(`    ✓ ${address.slice(0, 40)} | ${phone || "(no phone — will skip trace)"}`);
         }
         await new Promise(r => setTimeout(r, 1000));
       } catch { /* skip */ }

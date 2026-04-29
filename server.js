@@ -74,7 +74,9 @@ td{padding:8px 12px;border-bottom:1px solid #222}td:first-child{color:#888;width
 <tr><td>Schedule</td><td>9am &amp; 5pm EDT daily</td></tr>
 <tr><td>Max leads/run</td><td>${MAX_LEADS}</td></tr>
 <tr><td>Server time</td><td>${new Date().toISOString()}</td></tr>
-</table></body></html>`);
+</table>
+<br><a href="/run" style="display:inline-block;padding:12px 28px;background:#22c55e;color:#000;font-weight:bold;text-decoration:none;border-radius:6px;font-size:1.1em">▶ Run Now</a>
+</body></html>`);
 });
 
 // ── Twilio SMS webhook ────────────────────────────────────────────────────────
@@ -94,12 +96,14 @@ app.post("/sms", async (req, res) => {
   }
 });
 
-// ── Manual trigger — for testing ─────────────────────────────────────────────
-app.post("/run", async (req, res) => {
+// ── Manual trigger — POST (API) or GET (browser button) ──────────────────────
+async function triggerRun(res) {
   if (!modReady) return res.json({ status: "error", message: "modules not ready" });
-  res.json({ status: "ok", message: "run started" });
+  res.json({ status: "ok", message: "run started — check Railway logs" });
   runAndTrack().catch(err => console.error("Manual run error:", err.message));
-});
+}
+app.post("/run", (req, res) => triggerRun(res));
+app.get("/run",  (req, res) => triggerRun(res));
 
 // ── Phone lookup — used by sms-router ────────────────────────────────────────
 app.post("/lookup", (req, res) => {

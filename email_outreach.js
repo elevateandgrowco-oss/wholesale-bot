@@ -1,7 +1,7 @@
 /**
  * email_outreach.js
- * Sends a plain-text outreach email to land owners when skip trace finds their email.
- * Uses Resend — same as google-maps-bot.
+ * Sends a plain-text outreach email to house owners when skip trace finds their email.
+ * Uses Resend.
  */
 
 import { Resend } from "resend";
@@ -15,7 +15,7 @@ const PHYSICAL_ADDRESS = process.env.PHYSICAL_ADDRESS || "548 Market St PMB 1234
 
 const SUBJECTS = [
   (addr) => `Question about your property on ${addr}`,
-  (addr) => `Your lot on ${addr}`,
+  (addr) => `Your house on ${addr}`,
   (addr) => `Interested in ${addr}`,
   (addr) => `Quick question — ${addr}`,
 ];

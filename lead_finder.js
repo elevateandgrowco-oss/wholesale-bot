@@ -210,7 +210,7 @@ export async function findCraigslistLeads(market, maxLeads = 10) {
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     });
     const page = await browser.newPage();
-    await page.setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    await page.setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
 
     const searchUrl = `https://${market.cl}.craigslist.org/search/rea?srchType=T&max_price=350000&query=for+sale+by+owner&sort=priceasc`;
     await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 30000 });
@@ -270,7 +270,7 @@ async function findZillowLeads(market, maxLeads = 15) {
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     });
     const page = await browser.newPage();
-    await page.setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    await page.setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
 
     const citySlug = market.city.toLowerCase().replace(/\s+/g, "-");
     const stateSlug = market.state.toLowerCase();
@@ -343,7 +343,7 @@ async function findRedfinLeads(market, maxLeads = 15) {
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     });
     const page = await browser.newPage();
-    await page.setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    await page.setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
 
     const citySlug = market.city.toLowerCase().replace(/\s+/g, "-");
     // Redfin URL for price-reduced homes under $350K
@@ -402,7 +402,7 @@ async function findAuctionLeads(market, maxLeads = 10) {
     const res = await axios.get(url, {
       timeout: 15000,
       headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml",
       },
     });
@@ -562,7 +562,7 @@ async function findFacebookLeads(market, maxLeads = 10) {
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     });
     const page = await browser.newPage();
-    await page.setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    await page.setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
 
     // Facebook Marketplace doesn't require login for browsing
     const lat = { "GA": "33.749", "TX": "29.760", "FL": "28.538", "TN": "35.148", "OH": "39.961", "MI": "42.331", "IN": "39.768", "MO": "38.627", "AZ": "33.448", "NC": "35.227", "AL": "33.520", "MD": "39.290", "KY": "38.252" }[market.state] || "33.749";

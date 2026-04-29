@@ -15,8 +15,10 @@ let puppeteerReady = false;
 let puppeteer;
 async function initPuppeteer() {
   if (puppeteerReady) return;
-  const { default: p } = await import("puppeteer");
-  puppeteer = p;
+  const { default: pExtra } = await import("puppeteer-extra");
+  const { default: StealthPlugin } = await import("puppeteer-extra-plugin-stealth");
+  pExtra.use(StealthPlugin());
+  puppeteer = pExtra;
   puppeteerReady = true;
 }
 

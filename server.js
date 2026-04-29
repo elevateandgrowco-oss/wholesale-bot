@@ -23,14 +23,58 @@ let m = {};
 let modReady = false;
 let modError = null;
 
+// ── Run tracking ──────────────────────────────────────────────────────────────
+let lastRunAt = null;
+let lastRunStatus = "never";
+let lastRunDuration = null;
+let runCount = 0;
+
+async function runAndTrack() {
+  const start = Date.now();
+  runCount++;
+  lastRunStatus = "running";
+  try {
+    await runOutreach();
+    lastRunStatus = "success";
+  } catch (err) {
+    lastRunStatus = "error: " + err.message;
+    console.error("Run error:", err.message);
+  } finally {
+    lastRunAt = new Date().toISOString();
+    lastRunDuration = ((Date.now() - start) / 1000).toFixed(1) + "s";
+  }
+}
+
 // ── Health check — always responds immediately ────────────────────────────────
 app.get("/", (req, res) => {
-  res.json({
-    status: "ok",
-    service: "wholesale-bot",
-    modules: modReady ? "ready" : (modError ? "error: " + modError : "loading"),
-    time: new Date().toISOString(),
-  });
+  const modStatus = modReady ? "ready" : (modError ? `error: ${modError}` : "loading");
+  const modClass = modReady ? "ok" : (modError ? "err" : "warn");
+  const log = modReady ? m.loadLog() : null;
+  const leads = log?.leads || [];
+  const contacted = leads.filter(l => l.smsSent).length;
+  const replied = leads.filter(l => l.conversation?.some(c => c.role === "user")).length;
+  const underContract = leads.filter(l => l.status === "under_contract").length;
+  res.send(`<!DOCTYPE html><html><head><title>Wholesale Bot</title>
+<style>body{font-family:monospace;background:#0a0a0a;color:#e0e0e0;padding:32px;max-width:600px}
+h1{color:#22c55e}table{width:100%;border-collapse:collapse;margin-top:16px}
+td{padding:8px 12px;border-bottom:1px solid #222}td:first-child{color:#888;width:40%}
+.ok{color:#22c55e}.err{color:#ef4444}.warn{color:#f59e0b}</style></head>
+<body><h1>Wholesale Bot</h1>
+<table>
+<tr><td>Status</td><td class="${modClass}">${modStatus}</td></tr>
+<tr><td>Mode</td><td>${DRY_RUN ? "DRY RUN" : "LIVE"}</td></tr>
+<tr><td>Last run</td><td>${lastRunAt || "never"}</td></tr>
+<tr><td>Last status</td><td class="${lastRunStatus === "success" ? "ok" : lastRunStatus === "running" ? "warn" : lastRunStatus === "never" ? "" : "err"}">${lastRunStatus}</td></tr>
+<tr><td>Last duration</td><td>${lastRunDuration || "—"}</td></tr>
+<tr><td>Total runs</td><td>${runCount}</td></tr>
+<tr><td>Total leads</td><td>${leads.length}</td></tr>
+<tr><td>SMS sent</td><td>${contacted}</td></tr>
+<tr><td>Replied</td><td>${replied}</td></tr>
+<tr><td>Under contract</td><td class="${underContract > 0 ? "ok" : ""}">${underContract}</td></tr>
+<tr><td>Schedule</td><td>9am &amp; 5pm EDT daily</td></tr>
+<tr><td>Max leads/run</td><td>${MAX_LEADS}</td></tr>
+<tr><td>Server time</td><td>${new Date().toISOString()}</td></tr>
+</table></body></html>`);
 });
 
 // ── Twilio SMS webhook ────────────────────────────────────────────────────────
@@ -54,7 +98,7 @@ app.post("/sms", async (req, res) => {
 app.post("/run", async (req, res) => {
   if (!modReady) return res.json({ status: "error", message: "modules not ready" });
   res.json({ status: "ok", message: "run started" });
-  runOutreach().catch(err => console.error("Manual run error:", err.message));
+  runAndTrack().catch(err => console.error("Manual run error:", err.message));
 });
 
 // ── Phone lookup — used by sms-router ────────────────────────────────────────
@@ -82,6 +126,7 @@ async function loadModules() {
     const sb = await import("./sms_bot.js");
     const inf = await import("./investor_finder.js");
     const ll = await import("./leads_log.js");
+    const eo = await import("./email_outreach.js");
 
     m = {
       findLeads: lf.findLeads,
@@ -91,6 +136,7 @@ async function loadModules() {
       runFollowUps: sb.runFollowUps,
       handleIncomingSMS: sb.handleIncomingSMS,
       updateInvestorDatabase: inf.updateInvestorDatabase,
+      sendOutreachEmail: eo.sendOutreachEmail,
       loadLog: ll.loadLog,
       saveLog: ll.saveLog,
       hasBeenContacted: ll.hasBeenContacted,
@@ -170,8 +216,20 @@ async function runOutreach() {
         } catch (err) {
           console.error(`❌ SMS failed: ${err.message}`);
         }
+
+        // Also email if skip trace found one (double touch = more responses)
+        if (lead.email) {
+          try {
+            await m.sendOutreachEmail(lead, analysis);
+            console.log(`   📧 Email sent to ${lead.email}`);
+            m.updateLead(log, loggedLead.id, { emailSent: true });
+            m.saveLog(log);
+          } catch (err) {
+            console.error(`❌ Email failed: ${err.message}`);
+          }
+        }
       } else {
-        console.log(`[DRY RUN] Would text ${lead.phone}`);
+        console.log(`[DRY RUN] Would text ${lead.phone}${lead.email ? ` + email ${lead.email}` : ""}`);
       }
 
       await new Promise(r => setTimeout(r, 2000));
@@ -195,12 +253,12 @@ async function runOutreach() {
 // ── Cron: 9am and 5pm EDT daily ──────────────────────────────────────────────
 cron.schedule("0 9 * * *", () => {
   console.log("\n⏰ Cron fired: 9am EDT run");
-  runOutreach().catch(err => console.error("Outreach error:", err.message));
+  runAndTrack().catch(err => console.error("Outreach error:", err.message));
 }, { timezone: "America/New_York" });
 
 cron.schedule("0 17 * * *", () => {
   console.log("\n⏰ Cron fired: 5pm EDT run");
-  runOutreach().catch(err => console.error("Outreach error:", err.message));
+  runAndTrack().catch(err => console.error("Outreach error:", err.message));
 }, { timezone: "America/New_York" });
 
 console.log("📅 Cron scheduled: 9am and 5pm EDT daily");

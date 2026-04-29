@@ -13,6 +13,45 @@
 import * as cheerio from "cheerio";
 import axios from "axios";
 import fs from "fs";
+
+// ── Robust Zillow listing extractor ──────────────────────────────────────────
+function extractZillowListings(html) {
+  const $ = cheerio.load(html);
+  const found = [];
+
+  const nextData = $("script#__NEXT_DATA__").html();
+  if (nextData) {
+    try {
+      const parsed = JSON.parse(nextData);
+      function dig(obj) {
+        if (!obj || typeof obj !== "object") return;
+        if (Array.isArray(obj)) {
+          if (obj.length > 0 && (obj[0]?.address?.streetAddress || obj[0]?.streetAddress)) {
+            found.push(...obj);
+            return;
+          }
+          obj.forEach(dig);
+          return;
+        }
+        for (const key of ["listResults", "relaxedResults", "mapResults", "results", "homes", "listings"]) {
+          if (obj[key]) { dig(obj[key]); if (found.length) return; }
+        }
+        if (!found.length) Object.values(obj).forEach(v => { if (!found.length) dig(v); });
+      }
+      dig(parsed);
+    } catch { /* ignore */ }
+  }
+
+  if (found.length === 0) {
+    $("[data-test='property-card'], article").each((_, el) => {
+      const address = $(el).find("address, [data-test='property-card-addr']").text().trim();
+      const price = parseInt($(el).find("[data-test='property-card-price']").text().replace(/[^0-9]/g, "")) || 0;
+      if (address && address.length > 5) found.push({ address, price });
+    });
+  }
+
+  return found;
+}
 import dotenv from "dotenv";
 import { skipTraceLeads } from "./skip_tracer.js";
 dotenv.config();
@@ -280,44 +319,23 @@ async function findZillowLeads(market, maxLeads = 15) {
     await new Promise(r => setTimeout(r, 2000));
 
     const content = await page.content();
-    const $ = cheerio.load(content);
-
-    // Extract listing data from Zillow's JSON embed
-    const scriptTags = $("script[type='application/json'], script#__NEXT_DATA__").toArray();
-    for (const script of scriptTags) {
-      try {
-        const json = JSON.parse($(script).html() || "{}");
-        const searchResults = JSON.stringify(json).match(/"zpid":\d+.*?"address":\{[^}]+\}/g) || [];
-        for (const match of searchResults.slice(0, maxLeads)) {
-          try {
-            const obj = JSON.parse(`{${match}}`);
-            if (obj.address?.streetAddress) {
-              leads.push({
-                source: "zillow_fsbo",
-                city: market.name,
-                address: `${obj.address.streetAddress}, ${obj.address.city}, ${obj.address.state}`,
-                askingPrice: obj.price || 0,
-                phone: null,
-                motivation: "fsbo",
-                url: obj.detailUrl ? `https://www.zillow.com${obj.detailUrl}` : null,
-                scrapedAt: new Date().toISOString(),
-              });
-            }
-          } catch { /* skip */ }
-        }
-      } catch { /* not json */ }
-    }
-
-    // Fallback: scrape visible cards
-    if (leads.length === 0) {
-      $("[data-test='property-card'], .list-card, article").each((_, el) => {
-        const address = $(el).find("address, [data-test='property-card-addr']").text().trim();
-        const priceText = $(el).find("[data-test='property-card-price'], .list-card-price").text().trim();
-        const price = parseInt(priceText.replace(/[^0-9]/g, "")) || 0;
-        if (address && leads.length < maxLeads) {
-          leads.push({ source: "zillow_fsbo", city: market.name, address, askingPrice: price, phone: null, motivation: "fsbo", scrapedAt: new Date().toISOString() });
-        }
-      });
+    const listings = extractZillowListings(content);
+    for (const r of listings.slice(0, maxLeads)) {
+      const street = r.address?.streetAddress || r.address || r.streetAddress || "";
+      const city   = r.address?.city  || market.city;
+      const state  = r.address?.state || market.state;
+      if (street) {
+        leads.push({
+          source: "zillow_fsbo",
+          city: market.name,
+          address: `${street}, ${city}, ${state}`,
+          askingPrice: r.price || r.unformattedPrice || 0,
+          phone: null,
+          motivation: "fsbo",
+          url: r.detailUrl ? `https://www.zillow.com${r.detailUrl}` : null,
+          scrapedAt: new Date().toISOString(),
+        });
+      }
     }
 
     if (leads.length) console.log(`  ✓ Zillow FSBO ${market.name}: ${leads.length} leads`);

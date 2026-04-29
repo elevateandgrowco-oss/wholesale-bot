@@ -165,8 +165,8 @@ async function main() {
 // Run immediately on startup
 main().catch(err => console.error("Startup run failed:", err.message));
 
-// Then run at 9am, 12pm, 3pm, 6pm, 8pm ET every day
-cron.schedule("0 9,12,15,18,20 * * *", () => {
+// Then run at 8am, 10am, 12pm, 2pm, 4pm, 6pm, 8pm ET every day
+cron.schedule("0 8,10,12,14,16,18,20 * * *", () => {
   console.log(`\n⏰ Scheduled run — ${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })}`);
   main().catch(err => console.error("Scheduled run failed:", err.message));
 }, { timezone: "America/New_York" });

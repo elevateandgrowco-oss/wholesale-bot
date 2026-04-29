@@ -15,6 +15,8 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+import cron from "node-cron";
+
 import { findLeads } from "./lead_finder.js";
 import { analyzeProperty, generateOfferMessage } from "./property_analyzer.js";
 import { sendOfferSMS, runFollowUps } from "./sms_bot.js";
@@ -152,7 +154,13 @@ async function main() {
   printSummary(log);
 }
 
-main().catch(err => {
-  console.error("Bot crashed:", err);
-  process.exit(1);
-});
+// Run immediately on startup
+main().catch(err => console.error("Startup run failed:", err.message));
+
+// Then run at 9am, 12pm, 3pm, 6pm, 8pm ET every day
+cron.schedule("0 9,12,15,18,20 * * *", () => {
+  console.log(`\n⏰ Scheduled run — ${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })}`);
+  main().catch(err => console.error("Scheduled run failed:", err.message));
+}, { timezone: "America/New_York" });
+
+console.log("⏰ Scheduler active — runs at 9am, 12pm, 3pm, 6pm, 8pm ET daily");

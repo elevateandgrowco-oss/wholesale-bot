@@ -254,15 +254,11 @@ async function runOutreach() {
   m.printSummary(m.loadLog());
 }
 
-// ── Cron: 9am and 5pm EDT daily ──────────────────────────────────────────────
-cron.schedule("0 9 * * *", () => {
-  console.log("\n⏰ Cron fired: 9am EDT run");
+// ── Cron: every 2 hours, 8am–8pm ET, Mon–Fri ─────────────────────────────────
+cron.schedule("0 8,10,12,14,16,18,20 * * 1-5", () => {
+  const hour = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: true });
+  console.log(`\n⏰ Scheduled run (${hour} ET)`);
   runAndTrack().catch(err => console.error("Outreach error:", err.message));
 }, { timezone: "America/New_York" });
 
-cron.schedule("0 17 * * *", () => {
-  console.log("\n⏰ Cron fired: 5pm EDT run");
-  runAndTrack().catch(err => console.error("Outreach error:", err.message));
-}, { timezone: "America/New_York" });
-
-console.log("📅 Cron scheduled: 9am and 5pm EDT daily");
+console.log("📅 Cron scheduled: every 2 hours, 8am–8pm ET, Mon–Fri (7 runs/day)");

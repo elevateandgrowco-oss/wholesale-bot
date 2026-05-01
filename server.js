@@ -96,6 +96,26 @@ app.post("/sms", async (req, res) => {
   }
 });
 
+// ── Stats JSON endpoint ───────────────────────────────────────────────────────
+app.get("/stats", (req, res) => {
+  const log = modReady ? m.loadLog() : null;
+  const leads = log?.leads || [];
+  const contacted = leads.filter(l => l.smsSent).length;
+  const voicemails = leads.filter(l => l.voicemailSent).length;
+  const replied = leads.filter(l => l.conversation?.some(c => c.role === "user")).length;
+  const underContract = leads.filter(l => l.status === "under_contract").length;
+  res.json({
+    status: modReady ? "ready" : (modError ? "error" : "loading"),
+    lastRun: lastRunAt,
+    lastRunStatus,
+    totalLeads: leads.length,
+    smsSent: contacted,
+    voicemailsSent: voicemails,
+    replied,
+    underContract,
+  });
+});
+
 // ── Manual trigger — POST (API) or GET (browser button) ──────────────────────
 async function triggerRun(res) {
   if (!modReady) return res.json({ status: "error", message: "modules not ready" });

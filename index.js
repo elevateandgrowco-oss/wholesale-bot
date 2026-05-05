@@ -45,7 +45,7 @@ async function processLead(lead, log) {
   console.log(`   Asking: $${lead.askingPrice?.toLocaleString() || "unknown"} | Source: ${lead.source}`);
 
   // Skip if already contacted
-  if (hasBeenContacted(log, lead.address)) {
+  if (hasBeenContacted(log, lead.address, lead.phone)) {
     console.log(`   ⏭️  Already contacted — skipping`);
     return;
   }

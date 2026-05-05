@@ -24,8 +24,13 @@ export function saveLog(log) {
   fs.writeFileSync(LOG_FILE, JSON.stringify(log, null, 2));
 }
 
-export function hasBeenContacted(log, address) {
-  return log.leads.some(l => l.address === address && (l.smsSent || l.voicemailSent));
+export function hasBeenContacted(log, address, phone) {
+  const normalizePhone = p => p ? p.replace(/\D/g, "").slice(-10) : null;
+  const normPhone = normalizePhone(phone);
+  return log.leads.some(l =>
+    (l.address === address || (normPhone && normalizePhone(l.phone) === normPhone))
+    && (l.smsSent || l.voicemailSent)
+  );
 }
 
 export function addLead(log, leadData) {

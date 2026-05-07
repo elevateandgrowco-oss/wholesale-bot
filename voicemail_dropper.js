@@ -26,7 +26,10 @@ function formatPhone(phone) {
 export async function dropVoicemail(phone) {
   const email = process.env.SLYBROADCAST_EMAIL;
   const password = process.env.SLYBROADCAST_PASSWORD;
-  const audioFile = process.env.SLYBROADCAST_AUDIO_FILE || "realestate";
+  const AUDIO_POOL = process.env.SLYBROADCAST_AUDIO_FILE
+    ? [process.env.SLYBROADCAST_AUDIO_FILE]
+    : ["realestate", "land flip", "surplus"];
+  const audioFile = AUDIO_POOL[Math.floor(Math.random() * AUDIO_POOL.length)];
   const callerId = formatPhone(process.env.SLYBROADCAST_CALLER_ID || process.env.TWILIO_PHONE || "") || "";
 
   if (!email || !password) {

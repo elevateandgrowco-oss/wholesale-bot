@@ -33,7 +33,7 @@ import { updateInvestorDatabase, getInvestorCount } from "./investor_finder.js";
 import { loadLog, saveLog, hasBeenContacted, addLead, updateLead, printSummary } from "./leads_log.js";
 
 const DRY_RUN = process.env.DRY_RUN === "true" || process.argv.includes("--dry-run");
-const MAX_LEADS = parseInt(process.env.MAX_LEADS_PER_RUN || "20");
+const MAX_LEADS = parseInt(process.env.MAX_LEADS_PER_RUN || "50");
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
@@ -42,7 +42,8 @@ function sleep(ms) {
 async function processLead(lead, log) {
   console.log(`\n${"─".repeat(55)}`);
   console.log(`🏠 ${lead.address || lead.title}`);
-  console.log(`   Asking: $${lead.askingPrice?.toLocaleString() || "unknown"} | Source: ${lead.source}`);
+  const auctionTag = lead.daysToAuction ? ` | ⏰ AUCTION IN ${lead.daysToAuction} DAYS` : "";
+  console.log(`   Asking: $${lead.askingPrice?.toLocaleString() || "unknown"} | Source: ${lead.source}${auctionTag}`);
 
   // Skip if already contacted
   if (hasBeenContacted(log, lead.address, lead.phone)) {
@@ -118,7 +119,32 @@ async function processLead(lead, log) {
     console.log(`   [DRY RUN] Would text ${lead.phone}${lead.email ? ` + email ${lead.email}` : ""}`);
   }
 
-  await sleep(2000);
+  await sleep(1000);
+}
+
+function isBusinessHours() {
+  const hour = parseInt(new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false }));
+  return hour >= 8 && hour < 21;
+}
+
+// ── Catch-up emails: send to any existing leads with emails not yet contacted ──
+async function catchUpEmails() {
+  if (DRY_RUN || !isBusinessHours()) return;
+  const log = loadLog();
+  const pending = (log.leads || []).filter(l => l.email && !l.emailSent && !l.unsubscribed);
+  if (!pending.length) return;
+  console.log(`\n📧 Catch-up emails: ${pending.length} leads with emails not yet contacted`);
+  for (const lead of pending) {
+    try {
+      await sendOutreachEmail(lead, lead.analysis || {});
+      console.log(`   ✉️  Emailed ${lead.email} — ${lead.address}`);
+      updateLead(log, lead.id, { emailSent: true, emailSentAt: new Date().toISOString() });
+      saveLog(log);
+      await sleep(1500);
+    } catch (err) {
+      console.error(`   ❌ Email failed for ${lead.email}: ${err.message}`);
+    }
+  }
 }
 
 async function main() {
@@ -143,7 +169,10 @@ async function main() {
     }
   }
 
-  // Step 2: Run follow-ups on existing leads
+  // Step 2: Catch-up emails for existing leads
+  await catchUpEmails();
+
+  // Step 3: Run follow-ups on existing leads
   console.log(`\n${"─".repeat(55)}`);
   console.log(`📬 Running follow-ups...`);
   await runFollowUps(DRY_RUN);
@@ -162,11 +191,12 @@ async function main() {
   printSummary(log);
 }
 
-// Run immediately on startup
-main().catch(err => console.error("Startup run failed:", err.message));
+// Run immediately on startup (business hours only)
+if (isBusinessHours()) main().catch(err => console.error("Startup run failed:", err.message));
+else console.log("Outside business hours (8am–9pm ET) — skipping startup run");
 
-// Then run at 8am, 10am, 12pm, 2pm, 4pm, 6pm, 8pm ET every day
-cron.schedule("0 8,10,12,14,16,18,20 * * *", () => {
+// Every hour 8am–9pm ET
+cron.schedule("0 8,9,10,11,12,13,14,15,16,17,18,19,20,21 * * *", () => {
   console.log(`\n⏰ Scheduled run — ${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })}`);
   main().catch(err => console.error("Scheduled run failed:", err.message));
 }, { timezone: "America/New_York" });

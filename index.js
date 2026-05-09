@@ -20,9 +20,21 @@ import cron from "node-cron";
 
 // Keep-alive HTTP server — prevents Railway from auto-sleeping the container
 const PORT = process.env.PORT || 3000;
+let _lastRunTime = Date.now();
+function isBusinessHours() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const h = now.getHours(), d = now.getDay();
+  return d >= 1 && d <= 5 && h >= 8 && h < 21;
+}
 http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end("wholesale-bot running\n");
+  const stale = isBusinessHours() && Date.now() - _lastRunTime > 90 * 60 * 1000;
+  if (stale) {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: `STALE - no run in ${Math.floor((Date.now() - _lastRunTime) / 60000)}m` }));
+  } else {
+    res.writeHead(200);
+    res.end("wholesale-bot running\n");
+  }
 }).listen(PORT, () => console.log(`✅ Health server on port ${PORT}`));
 
 import { findLeads } from "./lead_finder.js";
@@ -31,6 +43,7 @@ import { sendOfferSMS, runFollowUps } from "./sms_bot.js";
 import { sendOutreachEmail } from "./email_outreach.js";
 import { updateInvestorDatabase, getInvestorCount } from "./investor_finder.js";
 import { loadLog, saveLog, hasBeenContacted, addLead, updateLead, printSummary } from "./leads_log.js";
+import { queueForColdCall } from "./cold_caller.js";
 
 const DRY_RUN = process.env.DRY_RUN === "true" || process.argv.includes("--dry-run");
 const MAX_LEADS = parseInt(process.env.MAX_LEADS_PER_RUN || "50");
@@ -89,6 +102,9 @@ async function processLead(lead, log) {
   // Add to log
   const loggedLead = addLead(log, { ...lead, analysis });
   saveLog(log);
+
+  // Queue for AI cold call
+  await queueForColdCall({ ...lead, id: loggedLead.id, analysis });
 
   // Generate offer message
   const offerMessage = await generateOfferMessage(lead, analysis);
@@ -197,6 +213,7 @@ else console.log("Outside business hours (8am–9pm ET) — skipping startup run
 
 // Every hour 8am–9pm ET
 cron.schedule("0 8,9,10,11,12,13,14,15,16,17,18,19,20,21 * * *", () => {
+  _lastRunTime = Date.now();
   console.log(`\n⏰ Scheduled run — ${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })}`);
   main().catch(err => console.error("Scheduled run failed:", err.message));
 }, { timezone: "America/New_York" });

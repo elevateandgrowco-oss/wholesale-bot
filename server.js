@@ -23,11 +23,23 @@ let m = {};
 let modReady = false;
 let modError = null;
 
-// ── Run tracking ──────────────────────────────────────────────────────────────
+// ── Run tracking + daily stats ────────────────────────────────────────────────
 let lastRunAt = null;
 let lastRunStatus = "never";
 let lastRunDuration = null;
 let runCount = 0;
+
+const _stats = {
+  date: new Date().toISOString().slice(0, 10),
+  leadsScraped: 0, rvmSent: 0, rvmBlocked: 0,
+  smsSent: 0, smsBlocked: 0, emailsSent: 0,
+  dncBlocks: 0, quietBlocks: 0, unknownTzBlocks: 0, dupBlocks: 0,
+};
+function _stat(key, n = 1) {
+  const d = new Date().toISOString().slice(0, 10);
+  if (_stats.date !== d) Object.assign(_stats, { date: d, leadsScraped:0, rvmSent:0, rvmBlocked:0, smsSent:0, smsBlocked:0, emailsSent:0, dncBlocks:0, quietBlocks:0, unknownTzBlocks:0, dupBlocks:0 });
+  if (key in _stats) _stats[key] += n;
+}
 
 async function runAndTrack() {
   const start = Date.now();
@@ -96,6 +108,24 @@ app.post("/sms", async (req, res) => {
   }
 });
 
+// ── Health check (Railway probes this) ───────────────────────────────────────
+app.get("/health", (req, res) => {
+  const etHour = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", hour12: false });
+  const h = parseInt(etHour);
+  const stale = lastRunAt && h >= 9 && h < 21 && (Date.now() - new Date(lastRunAt).getTime()) > 3 * 60 * 60 * 1000;
+  res.status(stale ? 503 : 200).json({
+    status: stale ? "stale" : "ok",
+    bot: "wholesale-bot",
+    modReady,
+    lastRun: lastRunAt,
+    lastRunStatus,
+    smsOutboundEnabled: process.env.SMS_OUTBOUND_ENABLED !== "false",
+    twilioA2pApproved: process.env.TWILIO_A2P_APPROVED !== "false",
+    slybroadcastEnabled: !!(process.env.SLYBROADCAST_EMAIL && process.env.SLYBROADCAST_PASSWORD),
+    uptime: process.uptime(),
+  });
+});
+
 // ── Stats JSON endpoint ───────────────────────────────────────────────────────
 app.get("/stats", (req, res) => {
   const log = modReady ? m.loadLog() : null;
@@ -116,6 +146,59 @@ app.get("/stats", (req, res) => {
   });
 });
 
+// ── Operational report ────────────────────────────────────────────────────────
+app.get("/report", (req, res) => {
+  const log = modReady ? m.loadLog() : null;
+  const leads = log?.leads || [];
+
+  const dncCount  = leads.filter(l => l.doNotCall || l.dnc || l.dncFlag).length;
+  const optedOut  = leads.filter(l => l.unsubscribed || l.optedOut).length;
+  const badNum    = leads.filter(l => l.badNumber || l.wrongNumber).length;
+  const eligible  = leads.filter(l => l.phone && !l.smsSent && !l.doNotCall && !l.unsubscribed && !l.badNumber && !["under_contract","assigned","closed"].includes(l.status)).length;
+  const smsQueued = leads.filter(l => l.phone && !l.smsSent && !l.doNotCall && !l.unsubscribed && !l.badNumber).length;
+
+  const etNow = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const h = etNow.getHours(), dow = etNow.getDay();
+  const isWorkHours = dow >= 1 && dow <= 5 && h >= 9 && h < 21;
+  const aliveNoWork = isWorkHours && runCount > 0 && _stats.smsSent === 0 && _stats.rvmSent === 0 && _stats.emailsSent === 0;
+
+  res.json({
+    status: "ok",
+    bot: "wholesale-bot",
+    generatedAt: new Date().toISOString(),
+    isActuallyWorking: !aliveNoWork,
+    aliveButZeroWork: aliveNoWork,
+
+    today: { ..._stats },
+
+    queue: {
+      total: leads.length,
+      eligible,
+      smsQueuedPendingTwilio: smsQueued,
+      dncBlocked: dncCount,
+      optedOut,
+      badNumber: badNum,
+    },
+
+    guards: {
+      smsOutboundEnabled: process.env.SMS_OUTBOUND_ENABLED !== "false",
+      twilioA2pApproved:  process.env.TWILIO_A2P_APPROVED  !== "false",
+      slybroadcastConfigured: !!(process.env.SLYBROADCAST_EMAIL && process.env.SLYBROADCAST_PASSWORD),
+      vapiConfigured: !!process.env.VAPI_API_KEY,
+    },
+
+    health: {
+      modReady,
+      lastRun: lastRunAt,
+      lastRunStatus,
+      lastRunDuration,
+      runCount,
+      isWorkHours,
+      dryRun: DRY_RUN,
+    },
+  });
+});
+
 // ── Manual trigger — POST (API) or GET (browser button) ──────────────────────
 async function triggerRun(res) {
   if (!modReady) return res.json({ status: "error", message: "modules not ready" });
@@ -124,6 +207,39 @@ async function triggerRun(res) {
 }
 app.post("/run", (req, res) => triggerRun(res));
 app.get("/run",  (req, res) => triggerRun(res));
+
+// ── Cold call leads export — pulled by ai-coldcall-bot ───────────────────────
+app.get("/cold-call-leads", (req, res) => {
+  if (!modReady) return res.json([]);
+  const log = m.loadLog();
+  const leads = (log?.leads || [])
+    .filter(l => l.phone && !l.unsubscribed && !l.coldCalledAt && !l.doNotCall && !["under_contract", "assigned", "closed"].includes(l.status))
+    .slice(0, 50)
+    .map(l => ({
+      id: l.id,
+      source: "wholesale_bot",
+      ownerName: l.owner || l.ownerName || "there",
+      phone: l.phone,
+      address: l.address || null,
+      ourOffer: l.analysis?.ourOffer || null,
+    }));
+  res.json(leads);
+});
+
+// ── Cold call update — ai-coldcall-bot notifies outcome ───────────────────────
+app.post("/cold-call-update", (req, res) => {
+  if (!modReady) return res.json({ ok: false });
+  const { id, phone, status } = req.body;
+  const log = m.loadLog();
+  const digits = (phone || "").replace(/\D/g, "").slice(-10);
+  const lead = log.leads.find(l => l.id === id || (digits && l.phone?.replace(/\D/g, "").slice(-10) === digits));
+  if (lead) {
+    lead.coldCalledAt = new Date().toISOString();
+    if (status === "do_not_call") lead.doNotCall = true;
+    m.saveLog(log);
+  }
+  res.json({ ok: true });
+});
 
 // ── Phone lookup — used by sms-router ────────────────────────────────────────
 app.post("/lookup", (req, res) => {

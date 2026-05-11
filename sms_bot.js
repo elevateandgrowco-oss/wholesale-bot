@@ -11,6 +11,8 @@ import dotenv from "dotenv";
 import { dropVoicemail } from "./voicemail_dropper.js";
 import { handleSellerReply } from "./property_analyzer.js";
 import { loadLog, saveLog, getLead, updateLead } from "./leads_log.js";
+import { submitDealToHedgeFunds } from "./hedge_fund_buyer.js";
+import { checkOutreachAllowed } from "./outreach_guard.js";
 dotenv.config();
 
 const client = twilio(
@@ -23,20 +25,28 @@ const FROM = process.env.TWILIO_PHONE;
 // ── Send initial offer SMS ────────────────────────────────────────────────────
 export async function sendOfferSMS(phone, message, leadId) {
   if (!phone) throw new Error("No phone number");
-
-  // Format phone
   const formatted = phone.replace(/[^0-9]/g, "");
   const e164 = formatted.startsWith("1") ? `+${formatted}` : `+1${formatted}`;
-
-  await dropVoicemail(phone);
-
-  // Mark voicemail sent immediately so lead isn't re-processed if SMS fails
   const log = loadLog();
-  updateLead(log, leadId, {
-    voicemailSent: true,
-    voicemailSentAt: new Date().toISOString(),
-  });
-  saveLog(log);
+  const lead = getLead(log, leadId) || { phone };
+
+  // RVM guard — DNC/quiet-hours/Slybroadcast check BEFORE dropping voicemail.
+  // Slybroadcast is independent of Twilio A2P — RVM can run while SMS is locked.
+  const rvmGuard = checkOutreachAllowed(lead, "rvm");
+  if (rvmGuard.allowed) {
+    await dropVoicemail(phone);
+    updateLead(log, leadId, { voicemailSent: true, voicemailSentAt: new Date().toISOString() });
+    saveLog(log);
+  } else {
+    console.log(`   ⏭️  RVM skipped (${rvmGuard.reason}) → ${e164}`);
+  }
+
+  // SMS guard — blocked until Twilio A2P approved
+  const smsGuard = checkOutreachAllowed(lead, "sms");
+  if (!smsGuard.allowed) {
+    console.log(`   🚫 SMS blocked (${smsGuard.reason}) → ${e164}`);
+    return null;
+  }
 
   try {
     const result = await client.messages.create({ body: message, from: FROM, to: e164 });
@@ -60,6 +70,14 @@ export async function sendFollowUpSMS(phone, message, leadId, followUpNum) {
   const formatted = phone.replace(/[^0-9]/g, "");
   const e164 = formatted.startsWith("1") ? `+${formatted}` : `+1${formatted}`;
 
+  const log = loadLog();
+  const lead = getLead(log, leadId) || { phone };
+  const guard = checkOutreachAllowed(lead, "sms");
+  if (!guard.allowed) {
+    console.log(`   🚫 Follow-up SMS blocked (${guard.reason}) → ${e164}`);
+    return null;
+  }
+
   const result = await client.messages.create({
     body: message,
     from: FROM,
@@ -68,8 +86,6 @@ export async function sendFollowUpSMS(phone, message, leadId, followUpNum) {
 
   console.log(`   ✉️  Follow-up #${followUpNum} sent to ${e164}`);
 
-  const log = loadLog();
-  const lead = getLead(log, leadId);
   if (lead) {
     const conv = lead.conversation || [];
     conv.push({ role: "assistant", content: message, timestamp: new Date().toISOString() });
@@ -138,7 +154,7 @@ export async function handleIncomingSMS(fromPhone, body) {
   });
   saveLog(log);
 
-  // Check if seller seems interested — notify owner by SMS
+  // Check if seller seems interested — notify owner by SMS + start hedge fund search
   const interestedKeywords = ["interested", "offer", "how much", "cash", "when", "close", "yes", "sure", "tell me more", "okay", "deal", "accept"];
   if (interestedKeywords.some(w => body.toLowerCase().includes(w))) {
     console.log(`\n🔥 HOT LEAD — ${lead.address} — Seller replied: "${body}"`);
@@ -153,6 +169,12 @@ export async function handleIncomingSMS(fromPhone, body) {
       });
     } catch (e) {
       console.error("Alert failed:", e.message);
+    }
+    // Start hedge fund buyer search early — don't wait for signed contract
+    if (lead.analysis?.ourOffer) {
+      submitDealToHedgeFunds(lead, lead.analysis).catch(err =>
+        console.log(`  ⚠️  Early hedge fund submission: ${err.message}`)
+      );
     }
   }
 }
@@ -180,7 +202,7 @@ export async function runFollowUps(dryRun = false) {
 
     // Follow-up 1: Day 3
     if (!lead.followUp1SentAt && daysSinceSent >= 3 && !hasReplied) {
-      const msg = `${hey}, did my text come through about ${shortAddr}? - Jon`;
+      const msg = `${hey}, did my text come through about ${shortAddr}? - Jon. Reply STOP to opt out`;
       if (!dryRun) {
         await sendFollowUpSMS(lead.phone, msg, lead.id, 1);
       } else {
@@ -190,7 +212,7 @@ export async function runFollowUps(dryRun = false) {
 
     // Follow-up 2: Day 7
     if (!lead.followUp2SentAt && daysSinceSent >= 7 && !hasReplied) {
-      const msg = `${hey}, still interested in ${shortAddr} if you'd consider ${offer}. No rush either way — Jon`;
+      const msg = `${hey}, still interested in ${shortAddr} if you'd consider ${offer}. No rush either way — Jon. Reply STOP to opt out`;
       if (!dryRun) {
         await sendFollowUpSMS(lead.phone, msg, lead.id, 2);
       } else {

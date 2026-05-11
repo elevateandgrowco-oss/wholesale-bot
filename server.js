@@ -9,6 +9,8 @@ import cron from "node-cron";
 import express from "express";
 import dotenv from "dotenv";
 dotenv.config();
+import { checkOutreachAllowed } from "./outreach_guard.js";
+import { getRVMStats, checkRVMBatchAllowed } from "./rvm_ramp.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -165,6 +167,7 @@ app.get("/report", (req, res) => {
   const activeLeads = leads.filter(l => !l.doNotCall && !l.dnc && !l.unsubscribed && !l.badNumber);
   const eligSMS   = activeLeads.filter(l => l.phone && !l.smsSent && !["under_contract","assigned","closed"].includes(l.status)).length;
   const eligRVM   = activeLeads.filter(l => l.phone && !l.voicemailSent).length;
+  const rvmStats  = getRVMStats();
   const eligCall  = activeLeads.filter(l => l.phone && !l.coldCalledAt).length;
   const eligEmail = activeLeads.filter(l => l.email && !l.emailSent).length;
   const eligFollowUp = activeLeads.filter(l => l.phone && l.smsSentAt && !l.followUp4SentAt && !["under_contract","assigned","closed"].includes(l.status)).length;
@@ -230,13 +233,26 @@ app.get("/report", (req, res) => {
 
     eligible: {
       sms:      { count: eligSMS,      note: smsBlocked ? "BLOCKED — pending Twilio A2P" : "ready" },
-      rvm:      { count: eligRVM,      note: slybr ? "ready" : "BLOCKED — no Slybroadcast credentials" },
+      rvm:      { count: eligRVM, remaining: Math.max(0, eligRVM - rvmStats.submitted), note: slybr ? `ready — ${rvmStats.submitted}/${rvmStats.cap} sent today` : "BLOCKED — no Slybroadcast credentials" },
       call:     { count: eligCall,     note: vapiReady ? "ready" : "BLOCKED — no VAPI_API_KEY" },
       email:    { count: eligEmail,    note: resendReady ? "ready" : "BLOCKED — no RESEND_API_KEY/FROM_EMAIL" },
       followUp: { count: eligFollowUp, note: smsBlocked ? "BLOCKED — pending Twilio A2P" : "ready" },
     },
 
     topMarkets,
+
+    rvm: {
+      audioFile:       process.env.SLYBROADCAST_AUDIO_FILE || "(not set)",
+      submitted:       rvmStats.submitted,
+      failed:          rvmStats.failed,
+      cap:             rvmStats.cap,
+      remaining:       rvmStats.remaining,
+      queuedInLeads:   eligRVM,
+      batchSize:       rvmStats.batchSize,
+      batchGapMin:     rvmStats.batchGapMin,
+      lastBatchAt:     rvmStats.lastBatchAt,
+      recentCampaigns: rvmStats.recentCampaigns,
+    },
 
     schedule: {
       nextOutreachRun: `${nextOutreach}:00 ET`,

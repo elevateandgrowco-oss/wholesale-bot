@@ -5,7 +5,7 @@
  * Required env vars:
  *   SLYBROADCAST_EMAIL       — your slybroadcast login email
  *   SLYBROADCAST_PASSWORD    — your slybroadcast password
- *   SLYBROADCAST_AUDIO_FILE  — audio filename as it appears in your account (e.g. "realestate")
+ *   SLYBROADCAST_AUDIO_FILE  — audio filename as it appears in your account (e.g. "land flip")
  *
  * Optional:
  *   SLYBROADCAST_CALLER_ID   — callback number shown to recipient (defaults to TWILIO_PHONE)
@@ -28,7 +28,7 @@ export async function dropVoicemail(phone) {
   const password = process.env.SLYBROADCAST_PASSWORD;
   const AUDIO_POOL = process.env.SLYBROADCAST_AUDIO_FILE
     ? [process.env.SLYBROADCAST_AUDIO_FILE]
-    : ["realestate", "land flip", "surplus"];
+    : ["land flip", "realestate", "surplus"];
   const audioFile = AUDIO_POOL[Math.floor(Math.random() * AUDIO_POOL.length)];
   const callerId = formatPhone(process.env.SLYBROADCAST_CALLER_ID || process.env.TWILIO_PHONE || "") || "";
 
@@ -62,8 +62,10 @@ export async function dropVoicemail(phone) {
     const text = await res.text();
 
     if (text.startsWith("OK")) {
-      console.log(`   📞 Voicemail queued for ${phone}`);
-      return { success: true, response: text };
+      const sidMatch = text.match(/session_id=(\d+)/);
+      const sessionId = sidMatch ? sidMatch[1] : null;
+      console.log(`   📞 Voicemail queued for ${phone}${sessionId ? ` (session: ${sessionId})` : ""}`);
+      return { success: true, sessionId, response: text };
     } else {
       console.log(`   ⚠️  Slybroadcast: ${text}`);
       return { success: false, response: text };

@@ -5,7 +5,7 @@
  *
  * Env vars (all optional):
  *   RVM_DAILY_CAP      — max RVMs per calendar day (default 50)
- *   RVM_BATCH_SIZE     — max per batch, hard-capped at 25 (default 20)
+ *   RVM_BATCH_SIZE     — max per batch (default 20)
  *   RVM_BATCH_GAP_MIN  — min minutes between batch end and next batch start (default 30)
  *
  * Persists to DATA_DIR/rvm_ramp.json (Railway volume).
@@ -21,7 +21,7 @@ const DATA_DIR  = process.env.DATA_DIR || ".";
 const RAMP_FILE = path.join(DATA_DIR, "rvm_ramp.json");
 
 export const RVM_DAILY_CAP     = parseInt(process.env.RVM_DAILY_CAP     || "50");
-export const RVM_BATCH_SIZE    = Math.min(parseInt(process.env.RVM_BATCH_SIZE   || "20"), 25);
+export const RVM_BATCH_SIZE    = parseInt(process.env.RVM_BATCH_SIZE   || "20");
 export const RVM_BATCH_GAP_MIN = parseInt(process.env.RVM_BATCH_GAP_MIN || "30");
 
 function freshState() {
@@ -80,7 +80,7 @@ export function checkRVMBatchAllowed() {
 export function getRVMBatchLimit() {
   const d = loadRamp();
   const remaining = RVM_DAILY_CAP - d.submitted;
-  return Math.min(RVM_BATCH_SIZE, remaining, 25);
+  return Math.min(RVM_BATCH_SIZE, remaining);
 }
 
 /**

@@ -8,6 +8,7 @@ import { Resend } from "resend";
 import Anthropic from "@anthropic-ai/sdk";
 import dotenv from "dotenv";
 import { WHOLESALING_KNOWLEDGE } from "./knowledge.js";
+import { submitDealToHedgeFunds } from "./hedge_fund_buyer.js";
 dotenv.config();
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -86,5 +87,11 @@ ${contractText}
   });
 
   console.log(`  ✅ Contract sent to ${sellerEmail}`);
+
+  // Deal is now under contract — submit to hedge fund buyers immediately
+  await submitDealToHedgeFunds(lead, analysis).catch(err =>
+    console.log(`  ⚠️  Hedge fund submission: ${err.message}`)
+  );
+
   return contractText;
 }

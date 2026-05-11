@@ -95,6 +95,18 @@ const MARKETS = [
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+function computeDaysToAuction(dateStr) {
+  if (!dateStr) return null;
+  try {
+    const auction = new Date(dateStr);
+    const today = new Date();
+    const days = Math.ceil((auction - today) / (24 * 60 * 60 * 1000));
+    return days > 0 ? days : null; // null if already passed
+  } catch {
+    return null;
+  }
+}
+
 function extractPhone(text) {
   const matches = text.match(/(\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4})/g);
   if (!matches) return null;
@@ -208,18 +220,26 @@ async function findBatchDataLeads(market, filterType, maxLeads = 25) {
       || res.data?.properties
       || [];
 
-    const leads = results.map(p => ({
-      source: `batchdata_${filterType}`,
-      motivation: filterType,
-      city: market.name,
-      address: [p.propertyAddress, p.propertyCity, p.propertyState].filter(Boolean).join(", ")
-        || p.address || "",
-      askingPrice: p.estimatedValue || p.avm || p.assessedValue || 0,
-      ownerName: [p.ownerFirstName, p.ownerLastName].filter(Boolean).join(" ") || p.ownerName || null,
-      phone: null, // skip traced later
-      email: p.ownerEmail || null,
-      scrapedAt: new Date().toISOString(),
-    })).filter(l => l.address);
+    const leads = results.map(p => {
+      // Extract auction date if BatchData returns it
+      const rawAuctionDate = p.foreclosureAuctionDate || p.auctionDate || p.foreclosureSaleDate || null;
+      const daysToAuction = computeDaysToAuction(rawAuctionDate);
+
+      return {
+        source: `batchdata_${filterType}`,
+        motivation: filterType,
+        city: market.name,
+        address: [p.propertyAddress, p.propertyCity, p.propertyState].filter(Boolean).join(", ")
+          || p.address || "",
+        askingPrice: p.estimatedValue || p.avm || p.assessedValue || 0,
+        ownerName: [p.ownerFirstName, p.ownerLastName].filter(Boolean).join(" ") || p.ownerName || null,
+        phone: null, // skip traced later
+        email: p.ownerEmail || null,
+        auctionDate: rawAuctionDate || null,
+        daysToAuction,
+        scrapedAt: new Date().toISOString(),
+      };
+    }).filter(l => l.address);
 
     if (leads.length) console.log(`  🏦 BatchData ${filterType} (${market.name}): ${leads.length} properties`);
     return leads;
@@ -613,6 +633,100 @@ async function findFacebookLeads(market, maxLeads = 10) {
   return leads.slice(0, maxLeads);
 }
 
+// ── 9. Foreclosure.com — Auction Countdown Leads ─────────────────────────────
+// Properties with imminent auction dates = maximally motivated sellers
+async function findForeclosureAuctionLeads(market, maxLeads = 15) {
+  const leads = [];
+  try {
+    console.log(`  ⏰ Foreclosure.com auctions: ${market.name}`);
+
+    const url = `https://www.foreclosure.com/listing/list.html?state=${market.state}&city=${encodeURIComponent(market.city)}&pgsize=48&status=preforeclosure`;
+    const res = await axios.get(url, {
+      timeout: 20000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    });
+
+    const $ = cheerio.load(res.data);
+
+    // Extract from Foreclosure.com JSON data embedded in page
+    $("script").each((_, el) => {
+      if (leads.length >= maxLeads) return;
+      const text = $(el).html() || "";
+      if (!text.includes("auctionDate") && !text.includes("auction_date") && !text.includes("saleDate")) return;
+
+      // Try to parse property objects from JSON blobs in the page
+      const jsonMatches = text.match(/\{[^{}]*"address"[^{}]*"auction[^{}]*\}/gi) || [];
+      for (const match of jsonMatches) {
+        if (leads.length >= maxLeads) break;
+        try {
+          const obj = JSON.parse(match);
+          const address = obj.address || obj.streetAddress || "";
+          const rawDate = obj.auctionDate || obj.auction_date || obj.saleDate || obj.sale_date || "";
+          const daysToAuction = computeDaysToAuction(rawDate);
+          if (address && daysToAuction !== null) {
+            leads.push({
+              source: "foreclosure_auction",
+              motivation: "pre-foreclosure",
+              city: market.name,
+              address: address.includes(market.state) ? address : `${address}, ${market.city}, ${market.state}`,
+              askingPrice: parseInt((obj.openingBid || obj.price || "0").toString().replace(/[^0-9]/g, "")) || 0,
+              phone: null,
+              auctionDate: rawDate,
+              daysToAuction,
+              scrapedAt: new Date().toISOString(),
+            });
+          }
+        } catch { /* skip */ }
+      }
+    });
+
+    // Fallback: parse listing cards
+    if (leads.length === 0) {
+      $(".listing-card, .property-card, [class*='listing'], [class*='property-item']").each((_, el) => {
+        if (leads.length >= maxLeads) return;
+        const text = $(el).text();
+
+        // Look for "Auction:" date pattern in card text
+        const auctionMatch = text.match(/[Aa]uction[:\s]+(\w+ \d+,?\s*\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})/);
+        const address = $(el).find("[class*='address'], [itemprop='streetAddress'], address").text().trim()
+          || text.match(/\d+\s+[A-Za-z\s]+(St|Ave|Rd|Dr|Blvd|Way|Ln|Ct|Pl)\b/i)?.[0];
+
+        if (address && auctionMatch) {
+          const rawDate = auctionMatch[1];
+          const daysToAuction = computeDaysToAuction(rawDate);
+          if (daysToAuction !== null) {
+            leads.push({
+              source: "foreclosure_auction",
+              motivation: "pre-foreclosure",
+              city: market.name,
+              address: `${address}, ${market.city}, ${market.state}`,
+              askingPrice: 0,
+              phone: null,
+              auctionDate: rawDate,
+              daysToAuction,
+              scrapedAt: new Date().toISOString(),
+            });
+          }
+        }
+      });
+    }
+
+    if (leads.length) {
+      const urgent = leads.filter(l => l.daysToAuction <= 21).length;
+      console.log(`  ✓ Foreclosure.com ${market.name}: ${leads.length} leads (${urgent} within 21 days)`);
+    } else {
+      console.log(`  ℹ️  Foreclosure.com ${market.name}: no auction dates parsed (site may require login)`);
+    }
+  } catch (err) {
+    console.log(`  ⚠️  Foreclosure.com ${market.name}: ${err.message.slice(0, 60)}`);
+  }
+  return leads;
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 export async function findLeads(maxTotal = 30) {
   console.log(`\n🏠 Finding motivated seller leads from all sources...`);
@@ -632,6 +746,7 @@ export async function findLeads(maxTotal = 30) {
 
   // Run all sources in parallel for speed
   const [
+    foreclosureAuctionLeads,
     zillowLeads,
     redfinLeads,
     craigslistLeads,
@@ -640,6 +755,7 @@ export async function findLeads(maxTotal = 30) {
     taxDelinquentLeads,
     facebookLeads,
   ] = await Promise.allSettled([
+    findForeclosureAuctionLeads(market, 15),
     findZillowLeads(market, 12),
     findRedfinLeads(markets[1] || market, 12),
     findCraigslistLeads(markets[2] || market, 8),
@@ -649,7 +765,7 @@ export async function findLeads(maxTotal = 30) {
     findFacebookLeads(markets[2] || market, 8),
   ]);
 
-  for (const result of [zillowLeads, redfinLeads, craigslistLeads, auctionLeads, homepathLeads, taxDelinquentLeads, facebookLeads]) {
+  for (const result of [foreclosureAuctionLeads, zillowLeads, redfinLeads, craigslistLeads, auctionLeads, homepathLeads, taxDelinquentLeads, facebookLeads]) {
     if (result.status === "fulfilled") allLeads.push(...(result.value || []));
   }
 
@@ -663,9 +779,31 @@ export async function findLeads(maxTotal = 30) {
   const withPhones = await skipTraceLeads(unique);
   console.log(`   After skip trace: ${withPhones.length} with phone numbers`);
 
-  // Sort: most motivated first
-  const priority = { tax_delinquent: 0, auction_com: 1, fannie_mae_reo: 2, redfin_price_reduced: 3, zillow_fsbo: 4, craigslist: 5, facebook_marketplace: 6, csv_import: 7 };
-  withPhones.sort((a, b) => (priority[a.source] ?? 99) - (priority[b.source] ?? 99));
+  // Sort: auction-countdown leads first (by urgency), then by source priority
+  const sourcePriority = {
+    foreclosure_auction: 10,
+    tax_delinquent: 20,
+    batchdata_preForeclosure: 25,
+    auction_com: 30,
+    fannie_mae_reo: 40,
+    redfin_price_reduced: 50,
+    zillow_fsbo: 60,
+    craigslist: 70,
+    facebook_marketplace: 80,
+    csv_import: 90,
+  };
+
+  withPhones.sort((a, b) => {
+    // Auction countdown leads: sort by days ascending (fewest days = highest priority)
+    const aIsUrgent = a.daysToAuction !== null && a.daysToAuction !== undefined;
+    const bIsUrgent = b.daysToAuction !== null && b.daysToAuction !== undefined;
+
+    if (aIsUrgent && bIsUrgent) return a.daysToAuction - b.daysToAuction;
+    if (aIsUrgent) return -1;
+    if (bIsUrgent) return 1;
+
+    return (sourcePriority[a.source] ?? 99) - (sourcePriority[b.source] ?? 99);
+  });
 
   return withPhones.slice(0, maxTotal);
 }

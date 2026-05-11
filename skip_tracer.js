@@ -42,8 +42,8 @@ export async function skipTraceLeads(leads) {
 
   console.log(`\n📞 Skip tracing ${leadsNeedingPhones.length} leads for phone numbers...`);
 
-  // Build request for BatchData
-  const requests = leadsNeedingPhones.map((lead, i) => {
+  // Build request objects for all leads
+  const allRequests = leadsNeedingPhones.map((lead, i) => {
     const parts = lead.address.split(",").map(p => p.trim());
     const streetAddress = parts[0] || "";
     const cityState = parts[1] || lead.city || "";
@@ -51,46 +51,54 @@ export async function skipTraceLeads(leads) {
     const state = cityParts[cityParts.length - 1] || "";
     const city = cityParts.slice(0, -1).join(" ") || cityState;
     const zip = (parts[2] || "").replace(/[^0-9]/g, "").slice(0, 5);
-
     return {
       id: String(i),
-      propertyAddress: {
-        street: streetAddress,
-        city,
-        state,
-        zip,
-      },
+      propertyAddress: { street: streetAddress, city, state, zip },
     };
   });
 
-  try {
-    const response = await axios.post(
-      API_URL,
-      { requests },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${API_KEY}`,
-        },
-        timeout: 60000,
+  // BatchData hard limit: 100 items per request — chunk accordingly
+  const CHUNK = 100;
+  const allPersons = [];
+  for (let start = 0; start < allRequests.length; start += CHUNK) {
+    const requests = allRequests.slice(start, start + CHUNK);
+    try {
+      const response = await axios.post(
+        API_URL,
+        { requests },
+        {
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${API_KEY}` },
+          timeout: 60000,
+        }
+      );
+      const persons = response.data?.results?.persons || [];
+      // Re-map IDs to global index
+      for (const p of persons) {
+        const localIdx = parseInt(p?.request?.id ?? p?.meta?.id ?? "0");
+        allPersons.push({ ...p, _globalIdx: start + localIdx });
       }
-    );
+    } catch (chunkErr) {
+      const status = chunkErr.response?.status;
+      const msg = chunkErr.response?.data?.message || chunkErr.message;
+      if (status === 402) console.error("  ❌ Insufficient BatchData credits — add funds at batchdata.com");
+      else console.error(`  ❌ Skip trace chunk error (${start}-${start + CHUNK}): ${msg?.slice(0, 100)}`);
+    }
+  }
 
-    // BatchData response format: { results: { persons: [...] } }
-    const raw = response.data;
-    const persons = raw?.results?.persons || [];
-
-    console.log(`  📞 Got results for ${persons.length} addresses`);
+  try {
+    console.log(`  📞 Got results for ${allPersons.length} addresses`);
 
     let phonesFound = 0;
-    for (const person of persons) {
-      const idx = parseInt(person?.request?.id ?? person?.meta?.id ?? "0");
+    for (const person of allPersons) {
+      const idx = person._globalIdx;
       const lead = leadsNeedingPhones[idx];
       if (!lead) continue;
 
-      // Collect ALL phone numbers (mobile first, then others)
+      // Phone numbers: person.phoneNumbers array [{number, type, ...}]
       const phoneList = person.phoneNumbers || person.phones || [];
       const flatPhones = [person.phone1, person.phone2, person.mobilePhone].filter(Boolean);
+
+      // Collect ALL phone numbers (mobile first, then others)
       const allPhoneNumbers = [];
       if (phoneList.length > 0) {
         const mobiles = phoneList.filter(p => (p.type || p.phoneType || "").toLowerCase().includes("mobile"));
@@ -105,13 +113,14 @@ export async function skipTraceLeads(leads) {
         if (digits && !allPhoneNumbers.includes(digits)) allPhoneNumbers.push(digits);
       }
 
+      // Normalize to 10-digit
       const cleanedPhones = allPhoneNumbers
         .map(d => d.length === 11 && d.startsWith("1") ? d.slice(1) : d)
         .filter(d => d.length === 10);
 
       if (cleanedPhones.length > 0) {
         lead.phone = cleanedPhones[0];
-        lead.allPhones = cleanedPhones;
+        lead.allPhones = cleanedPhones; // Keep all for multi-attempt follow-ups
 
         // Name from person.name object
         const name = person.name || {};

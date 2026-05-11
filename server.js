@@ -333,6 +333,7 @@ async function loadModules() {
       generateOfferMessage: pa.generateOfferMessage,
       sendOfferSMS: sb.sendOfferSMS,
       runFollowUps: sb.runFollowUps,
+      runRVMBatch: sb.runRVMBatch,
       handleIncomingSMS: sb.handleIncomingSMS,
       updateInvestorDatabase: inf.updateInvestorDatabase,
       sendOutreachEmail: eo.sendOutreachEmail,
@@ -437,6 +438,12 @@ async function runOutreach() {
 
   console.log(`\n📬 Running follow-ups...`);
   await m.runFollowUps(DRY_RUN);
+
+  console.log(`\n📞 Running RVM batch...`);
+  try {
+    const rvmSent = await m.runRVMBatch(DRY_RUN);
+    if (rvmSent > 0) { _stat("rvmSent", rvmSent); _stats.lastOutreachAt = new Date().toISOString(); }
+  } catch (err) { console.error(`⚠️  RVM batch error: ${err.message}`); }
 
   try {
     const cities = ["atlanta", "houston", "dallas", "phoenix", "memphis"];

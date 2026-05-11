@@ -236,3 +236,30 @@ export async function runFollowUps(dryRun = false) {
     }
   }
 }
+
+// ── RVM batch — drop voicemails to existing leads that missed RVM ─────────────
+export async function runRVMBatch(dryRun = false) {
+  const log = loadLog();
+  let sent = 0, skipped = 0;
+
+  for (const lead of log.leads) {
+    if (lead.voicemailSent || lead.unsubscribed || lead.doNotCall || lead.badNumber || !lead.phone) continue;
+    const guard = checkOutreachAllowed(lead, "rvm");
+    if (!guard.allowed) { skipped++; continue; }
+
+    if (dryRun) {
+      console.log(`[DRY RUN] RVM → ${lead.phone} (${lead.ownerName || lead.owner || "?"})`);
+      continue;
+    }
+
+    const result = await dropVoicemail(lead.phone);
+    if (result?.success !== false) {
+      updateLead(log, lead.id, { voicemailSent: true, voicemailSentAt: new Date().toISOString() });
+      saveLog(log);
+      sent++;
+    }
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  if (sent > 0 || skipped > 0) console.log(`   📞 RVM batch: ${sent} sent, ${skipped} skipped`);
+  return sent;
+}
